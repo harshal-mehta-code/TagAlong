@@ -8,7 +8,7 @@ Ships first as a **web app (PWA)** — $0 to build, test, and share by URL — w
 
 ## Status
 
-🚧 **Planning phase — Checkpoint 2.** CP1 feedback incorporated (combinatorial performances model, web-first stack, learning mode, entry cues). Awaiting answers in doc 06 to lock the plan; no code yet.
+✅ **Plan locked (Checkpoint 2 complete).** Next: Checkpoint 3 — break Phase 0–1 into GitHub epics/issues for incremental build sessions. No code yet.
 
 ## Planning documents
 

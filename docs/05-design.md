@@ -37,9 +37,11 @@
 ```
 Tab bar: Home · [ ⊕ Start ] · Activity · Profile
 
-Home ──── Open Tags (default; filterable by part-needed & voicing)
-      └── Completed (the showcase feed)
-Tag Detail ── grid + playback, per-slot takes, join CTA, share
+Home ──── Performances (default — the showcase feed of completed collages)
+      └── In Progress (open tags, filterable by part-needed & voicing; start a new one)
+      └── (P2) weekly leaderboard card atop the feed — small, fun, resets Monday
+Performance ─ grid playback; every quadrant offers "Sing this part yourself" (swap-in)
+Tag Detail ── grid + playback, per-slot takes, join CTA, learn panel, share
 Start a Tag ─ 3-step sheet: Setup (voicing/part/key + pitch pipe) → Record → Publish
 Join flow ─── from any open slot: Pre-flight (headphones) → Listen/Practice → Record → Sync check → Submit
 Activity ──── notifications (part added, tag complete, take featured, likes)

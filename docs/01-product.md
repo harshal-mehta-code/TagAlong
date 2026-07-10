@@ -28,7 +28,8 @@ This is the heart of the product, revised from v1's creator-curated "featured ta
 
 - A **tag** is the seed: song, voicing, key, duration — created when someone records the first part.
 - A **take** is one person singing one part of that tag. Any number of people can record a take for any part, any time. No approvals, no gatekeeping.
-- A **performance** is a specific combination of takes covering all parts. It is created *organically*: when you join a tag, you choose which existing takes to hear in your earbuds while you sing (sensible default: the most-liked per part). If your take fills the last open part of that combination, **that performance is born** and posts to the feed automatically.
+- A **performance** is a specific combination of takes covering all parts. It is created *organically*: when you join a tag, you choose which existing takes to hear in your earbuds while you sing (sensible default: the most-liked per part). If your take fills the last open part of that combination, **that performance is born** and posts to the feed automatically — nobody has to "mark it complete."
+- **Swap-in is a first-class action.** Every quadrant of every performance has "Sing this part yourself": Harshal's bari + John's bass + Linda's lead + Martin's tenor complete a performance; Jason taps the bari quadrant, sings against John/Linda/Martin, and a *second* performance (Jason/John/Linda/Martin) posts as its own feed item. The original is untouched; both coexist and compete on likes.
 
 Why this works:
 
@@ -71,12 +72,14 @@ Real-world tag singing runs on visual cues (a conductor's breath, watching the l
 - Join: headphone pre-flight, combination picker (default = top takes), guide playback while recording, latency compensation + manual nudge
 - Takes & performances exactly as modeled above; synchronized grid playback in-app; watermarked video export for sharing
 - Learning basics: per-part solo/mute listening, loop, slow-down
-- Feed: Open tags + Performances, ranked by engagement; invite links (they're just URLs — no app install needed)
+- Feed: opens on **Performances** (the showcase — completed collages, ranked by engagement); **In Progress** tab for open tags to join or starting a new one; invite links (they're just URLs — no app install needed)
+- Swap-in ("Sing this part yourself") on every performance quadrant
 - Profiles, likes, report/block/delete-own-take, notifications (web push + email fallback)
 
 ### Phase 2 — depth
 - barbershoptags.com catalog integration, part-predominant mixes, entry markers
 - Comments, follows, richer ranking; performance family trees ("12 performances of this tag")
+- **Weekly leaderboard** — deliberately lightweight and fun, not a grind: a small card atop the feed (e.g., "This week: most tagged-along take · most performances completed · tag of the week"), resets Monday, no global all-time rankings
 - Android/iOS store packaging when validation warrants (doc 03)
 
 ### Phase 3 — community & events

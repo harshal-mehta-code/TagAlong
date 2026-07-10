@@ -1,6 +1,19 @@
-# 06 — Checkpoint 2: Decisions & Status
+# 06 — Decisions & Status
 
-*v2 — CP1 feedback incorporated. Resolved items recorded for the project log; open items below need your word to lock the plan.*
+*v3 — **PLAN LOCKED** at Checkpoint 2. Next: Checkpoint 3 — epic/issue breakdown.*
+
+## ✅ Resolved at Checkpoint 2
+
+| # | Decision | Outcome |
+|---|---|---|
+| 1 | Web-first | **Confirmed** by owner, trade-offs understood |
+| 2 | Beta plan | Self-testing first at the preview URL, then hand-picked friends via link-visibility tags, then community beta (rollout ladder in doc 02) |
+| 3 | Name | **TagAlong locked** (alternatives considered and declined) |
+| 4 | Completion | Automatic — the take that fills a combination's last part creates the performance; no manual "move to completed" |
+| 5 | Swap-in | First-class: every performance quadrant offers "Sing this part yourself" → new performance posts as its own feed item |
+| 6 | Feed | Opens on Performances (completed); In Progress tab for joining/starting |
+| 7 | Leaderboard | Weekly, lightweight, P2 (card atop feed, resets Monday, no all-time grind) |
+| 8 | Cost ceiling | Owner default: ~$25/mo assumption stands (flag before any spend regardless) |
 
 ## ✅ Resolved at Checkpoint 1 (your feedback → plan changes)
 
@@ -13,21 +26,11 @@
 | 5 | Entry cues | MVP: count-in + guide waveform timeline with playhead; P2: onset-detected entry markers with "in 2…1…" flash; P3: lyric cues. |
 | — | Design direction | Approved ("looks pretty nice") — identity carries over to the web app unchanged. |
 
-## ❓ Open — please answer to lock CP2
+## ❓ Remaining (non-blocking — defaults apply unless overridden)
 
-**1. Web-first confirmation.** Doc 03 lays out the honest trade-offs (biggest: iOS Safari recording quality risk, mitigated by nudge slider + native-plugin escape hatch; biggest win: $0 and share-links-just-work). **Confirm web-first, or push back.** *(My rec: confirm.)*
-
-**2. Cost ceiling.** Still open from CP1: what monthly spend triggers "ship monetization"? *(My planning assumption: ~$25/mo.)*
-
-**3. Beta audience.** Do you have a barbershop chapter / tag-singing circle you can recruit ~10–50 beta testers from when Phase 1 ships? (Shapes how much onboarding polish MVP needs.)
-
-**4. Auth providers for web MVP:** a. **(rec)** Google + email · b. email-only · c. also Facebook (the community lives in Facebook groups — could add in P2 when share loops mature)
-
-**5. barbershoptags.com outreach.** P2 integration should respect their API terms and ideally a friendly heads-up to the maintainer. Do you want to own that outreach when the time comes, or should a session draft the note for you? *(No action needed until P2.)*
-
-**6. Name check.** "TagAlong" — locked? Worth a 10-minute trademark/App-Store/domain sweep before CP3 bakes it into URLs and watermarks. A free `tagalong.pages.dev`-style subdomain starts us; custom domain (~$15/yr) is optional until launch. Buy one now or stay free? *(My rec: stay free until beta.)*
-
-**7. Anything you'd cut or add to the MVP table in doc 02** before it becomes ~40 GitHub issues at CP3?
+1. **Auth providers for web MVP:** proceeding with **Google + email**; Facebook login revisited in P2 (the community lives in Facebook groups).
+2. **barbershoptags.com outreach** (P2): a session will draft the note; owner sends it.
+3. **Domain:** staying on free `*.pages.dev` until beta; custom domain (~$15/yr) at owner's discretion later.
 
 ---
 

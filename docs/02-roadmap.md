@@ -20,7 +20,7 @@ The MVP must nail **one magic moment**: *you sang a part alone in your kitchen, 
 | Playback | Synchronized multi-video grid player; guide waveform timeline with playhead on record screen (entry cue v1) |
 | Learning basics | Per-part solo/mute mixer, section loop, slow-down (pitch-preserved) |
 | Export/share | Client-rendered 720p watermarked collage + open-slot end-card; share links just work (the app is the web player) |
-| Feed | Open tags (filter by part needed/voicing) + Performances, ranked by recency + like-rate |
+| Feed | Opens on **Performances** (completed collages); **In Progress** tab for joining open tags or starting one; swap-in on every performance quadrant; ranked by recency + like-rate |
 | Social minimum | Profiles with credit stats, likes, report/block, notifications (web push where supported + email fallback) |
 | Ops | Sentry, analytics, feature flags, CI + preview deploys per PR |
 
@@ -54,7 +54,9 @@ Vite/React/TS scaffold, design tokens, CI (lint/test/build + Cloudflare Pages pr
 5. **E5 — Social minimum & beta**: likes, report/block, invite links, PWA polish, beta rollout to a real chapter
 
 ### Phase 2 — Depth
-Catalog integration, entry markers, comments/follows, family trees, ranking v2. **Store packaging (Capacitor)** slots here when: retention holds, sync quality proven, and you approve the developer-account spend.
+Catalog integration, entry markers, comments/follows, family trees, ranking v2, **weekly leaderboard** (lightweight card atop the feed). **Store packaging (Capacitor)** slots here when: retention holds, sync quality proven, and you approve the developer-account spend.
+
+**Rollout ladder within Phase 1:** (a) owner self-testing at the preview URL from the first working build, (b) hand-picked friends via link-visibility tags — no public content required, (c) chapter/community beta. The product supports this natively: per-tag `public | link` visibility means the app is fully testable before anything is public.
 
 ### Phase 3 — Community & events
 Groups, weekly challenges, competitions, 5–8 parts, monetization if needed.
