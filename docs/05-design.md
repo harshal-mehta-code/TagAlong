@@ -1,5 +1,7 @@
 # 05 — Design Direction
 
+*v2 note: direction approved at CP1 and unchanged. The identity now ships in a web app first (doc 03): tokens become a Tailwind theme; "SF/New York" type maps to the system font stack + a bundled songbook serif (e.g., Charter/Source Serif) on non-Apple devices; all five prototype screens translate 1:1. Two additions from CP1 feedback: the record screen gains a guide-waveform timeline with playhead (entry cue v1), and tag detail gains a "Learn" panel (per-part solo/mute, loop, slow-down).*
+
 ## Design principles
 
 1. **Three taps to singing.** Every screen exists to get someone recording or watching. No screen may require reading a paragraph.

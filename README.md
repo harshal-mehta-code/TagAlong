@@ -1,12 +1,14 @@
 # TagAlong
 
-**Collaborative barbershop tag singing, on your phone.**
+**Collaborative barbershop tag singing, anywhere.**
 
-Record one part of a tag, invite friends (or strangers) to sing the other parts, and watch it become a split-screen quartet video. Think *Acapella by Mixcord*, but asynchronous and social: any tag you start is an open invitation for the world to tag along.
+Record one part of a tag; others add theirs on their own time, and every unique combination of parts becomes its own split-screen quartet performance. Think *Acapella by Mixcord*, but asynchronous and social — like a tag party at a convention, groups form organically.
+
+Ships first as a **web app (PWA)** — $0 to build, test, and share by URL — with Capacitor packaging for the App Store / Play Store once validated. See doc 03 for the strategy.
 
 ## Status
 
-🚧 **Planning phase — Checkpoint 1.** No code yet. We are locking the product plan, tech stack, and design direction before implementation begins.
+🚧 **Planning phase — Checkpoint 2.** CP1 feedback incorporated (combinatorial performances model, web-first stack, learning mode, entry cues). Awaiting answers in doc 06 to lock the plan; no code yet.
 
 ## Planning documents
 

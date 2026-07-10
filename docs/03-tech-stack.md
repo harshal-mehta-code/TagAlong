@@ -1,84 +1,95 @@
 # 03 — Tech Stack & Cost Analysis
 
-## Client
+*v2 — revised after Checkpoint 1 feedback: **web-first, $0 until validated**, with a packaged-app path for the stores.*
+
+## The strategy in one paragraph
+
+Build TagAlong as a **web app (PWA)**. It's a URL: testable on your own iPhone today, shareable with a barbershop chapter for beta, hosted free, **zero store fees, zero review process, $0 total spend**. The same codebase later wraps into iOS/Android store apps via **Capacitor** — you pay Apple's $99/yr and Google's one-time $25 only after the product has proven itself. Where web APIs turn out too weak (most likely the recording engine on iOS Safari), Capacitor lets us replace *just that module* with a native plugin — not rewrite the app.
+
+## Honest trade-offs vs. the v1 native-Swift plan
+
+| | Native SwiftUI (v1 plan) | Web-first + Capacitor (v2 plan) |
+|---|---|---|
+| Cost to first testable build | $99/yr + TestFlight friction | **$0, it's a URL** |
+| Android | second codebase, someday | same codebase, near-free |
+| Share links | need separate web player anyway | **the app *is* the web player** — a huge product win we previously deferred to P2 |
+| Recording/sync quality | best possible | good on Chrome/Android; **iOS Safari is the risk** (quirkier audio stack, less precise latency reporting). The manual nudge slider is the equalizer; native plugin is the escape hatch |
+| UI polish ceiling | highest | high (careful design required to not feel "webby"; our design system is custom anyway) |
+| Background/offline robustness | best | acceptable for 60 s clips |
+
+**My recommendation stands with your instinct: web-first.** For a validation-stage product whose main distribution channel is *links shared in Facebook groups and group chats*, a URL is not a compromise — it's the better product. The risk is concentrated in one place (iOS Safari recording), so we attack it first (doc 02, Checkpoint 4 spike).
+
+## Client stack
 
 | Layer | Choice | Why |
 |---|---|---|
-| Language | **Swift 6** | Native performance is non-negotiable for AV work; strict concurrency catches the race conditions AV code breeds |
-| UI | **SwiftUI**, min **iOS 17** | Fast to build/polish; iOS 17 floor gives modern APIs (Observation, SwiftData if needed) while covering ~90%+ of active devices in 2026 |
-| Capture/playback | **AVFoundation + AVAudioEngine** (UIKit interop where needed) | The whole product; detailed in doc 04 |
-| Compositing | **AVMutableComposition / AVVideoComposition, on-device** | Keeps the backend dumb and free — no server transcoding, ever. Phones are plenty fast for 4×720p |
-| Project generation | **XcodeGen** (`project.yml` → `.xcodeproj`) | `.xcodeproj` files are merge-conflict hell for multi-session AI development; a declarative YAML project is reviewable and deterministic |
-| Dependencies | Swift Package Manager only | No CocoaPods; keeps CI simple |
-| Purchases (P3) | StoreKit 2 | If/when monetization ships |
+| Language/framework | **TypeScript + React 18 + Vite** | Mainstream, componentized, excellent for incremental Claude-session development; huge ecosystem |
+| Styling | **Tailwind CSS + our design tokens** | The doc-05 identity (ivory/plum/brass, part colors) as a Tailwind theme |
+| State/data | TanStack Query + Firebase SDK | Boring and reliable |
+| Recording | **getUserMedia + MediaRecorder + Web Audio API** | Camera+mic capture; `AudioContext` for pitch pipe, count-in clicks, and guide-mix playback with sample-accurate scheduling |
+| Playback | **Synchronized multi-`<video>` grid** | The collage is *performed live* in the player from individual part videos — no pre-rendered composite needed to watch in-app (details in doc 04) |
+| Export | **WebCodecs + canvas (fast path) / ffmpeg.wasm (fallback)** | Rendering the watermarked share video happens client-side, only when someone exports |
+| PWA | Vite PWA plugin | "Add to Home Screen," icon, offline shell — app-like without stores |
+| Store packaging (later) | **Capacitor** | Wraps the same build for App Store / Play Store; native plugins (Swift/Kotlin) only where web APIs underperform |
 
-**Cross-platform (Flutter/React Native) was rejected:** frame-accurate multi-track AV recording, hardware audio timestamps, and custom video compositors are exactly where cross-platform frameworks fall apart. Android later means a second native client — that's the honest cost of this product category.
+**Browser support policy:** iOS Safari and Android Chrome are tier 1 (that's where singers are); desktop Chrome/Safari/Firefox tier 2. Every AV feature gets verified on a real iPhone before it counts as done.
 
-## Backend
+## Backend (unchanged from v1 — it was already web-friendly)
 
-Principle: **the backend stores metadata and blobs; it never touches video.** All heavy lifting (mixing, compositing, transcoding) happens on-device. This single decision is what makes a near-free backend possible.
+Principle: **the backend stores metadata and blobs; it never touches video.**
 
 | Concern | Choice | Free tier reality |
 |---|---|---|
-| Auth | **Firebase Auth** | Free at any realistic scale (50k MAU) |
-| Database | **Cloud Firestore** | Free: 1 GiB storage, 50k reads / 20k writes per day — ample for metadata at beta scale |
-| Media storage | **Cloudflare R2** | Free: 10 GB storage, 1M writes + 10M reads /mo, and — critically — **$0 egress forever** |
-| Signed upload/download URLs | **Cloudflare Worker** (~50 lines) | Free: 100k requests/day |
-| Push | **FCM → APNs** | Free |
-| Crash/analytics | **Firebase Crashlytics + Analytics** | Free |
-| CI | **GitHub Actions** | Free for public repo; 2,000 min/mo private (macOS runners burn 10×, so we keep CI lean) |
+| Auth | Firebase Auth (Google + email; Apple sign-in added at packaging) | Free to 50k MAU |
+| Database | Cloud Firestore | Free: 1 GiB, 50k reads / 20k writes per day |
+| Media storage | **Cloudflare R2** | Free: 10 GB + **$0 egress forever** — the keystone (video apps die on egress, not storage) |
+| Signed URLs / quotas | one Cloudflare Worker | Free: 100k req/day |
+| Hosting | **Cloudflare Pages** (free `*.pages.dev` subdomain to start) | Free, global CDN; custom domain ~$15/yr, optional until launch |
+| Push | Web Push (VAPID; supported on iOS 16.4+ for installed PWAs) + email fallback (Resend/SES free tier) | Free |
+| Crash/analytics | Sentry free tier + Firebase Analytics | Free |
+| CI | GitHub Actions (Linux runners now — no macOS tax) | Free |
 
-### Why R2 and not Firebase Storage / Supabase / S3
+### Cost projection
 
-Video social apps die on **egress** (people watching videos), not storage. A completed tag ≈ 20 MB; one modestly viral tag watched 5,000 times = 100 GB of egress. That's ~$12 on S3/Firebase (after free tier) *per viral video* — versus **$0 on R2**. R2's zero-egress pricing is the single biggest lever for the "keep it free" goal. Supabase's free tier (1 GB storage, 5 GB egress/mo) is exhausted by roughly the 3rd popular tag.
+~80 MB per fully-recorded tag (4 part videos + stems + thumbs; performances add metadata only — composites render client-side on export, not stored server-side except optionally caching popular ones).
 
-### Cost projection (honest numbers)
+| Stage | Users | Monthly cost |
+|---|---|---|
+| Build & personal testing | you + friends | **$0** |
+| Chapter beta | ~50 | **$0** |
+| Early traction | 1,000 MAU | **~$2–3** (R2 storage past 10 GB) |
+| Growth | 10,000 MAU | **~$30–50** |
+| Store packaging (whenever validated) | — | +$99/yr Apple, +$25 once Google |
 
-Assumptions: 60s max clips, 720p HEVC ≈ 15 MB/part, 20 MB/composite ⇒ ~80 MB per completed tag (4 parts + composite + thumbs).
+**Total spend to a fully working, publicly testable product: $0.** First dollar spent is your call, at a gate we define together (doc 02).
 
-| Stage | Users | Tags stored | Monthly cost |
-|---|---|---|---|
-| Beta | 50 | ~150 | **$0** (inside all free tiers) |
-| Early | 1,000 MAU | ~2,000 (160 GB) | **~$2–3** (R2 storage @ $0.015/GB over free 10 GB; Firestore likely still free) |
-| Growth | 10,000 MAU | ~25,000 (2 TB) | **~$30–50** (R2 storage + Firestore Blaze overage) |
-| Scale | 100k MAU | 20 TB+ | **~$300–500** — this is where monetization must exist |
+### Monetization plan (Phase 3, only if costs demand)
 
-**Unavoidable fixed cost:** Apple Developer Program, **$99/year**. There is no free path to the App Store.
+Unchanged: core loops free forever. **TagAlong Pro ~$3.99/mo**: 1080p/no-watermark exports, unlimited active started tags (free: 3), longer tags, competition hosting. On web, payments via Stripe (no 30% Apple cut for web users — another web-first bonus); StoreKit/Play Billing added at packaging where required.
 
-### The honest answer to "can the backend be free?"
-
-**Yes through beta and early growth (roughly the first 1–2k users), effectively yes (<$5/mo) beyond that for a long while** — *because* of the on-device-compositing + R2 architecture. It stops being free only if the app succeeds, at which point:
-
-### Monetization plan (Phase 3, only if needed)
-
-Free tier stays genuinely useful forever (record, join, share — the loops never paywall). **TagAlong Pro, ~$3.99/mo or $24.99/yr**:
-
-- 1080p exports, no watermark
-- Unlimited *active started* tags (free: 3 open at a time — a natural, fair limiter that also caps storage growth)
-- Longer tags (up to 2 min), custom collage layouts
-- Host competitions/challenges (P3 feature)
-
-Storage hygiene also controls cost: unfinished tags with no activity for 90 days get a warning → archived (parts deleted, metadata kept); contributors can always re-export before archive. Old raw parts of *completed* tags can be cold-archived after the composite exists.
+Storage hygiene: inactive unfinished tags archived after 90 days (with warning + re-export window).
 
 ## Server code footprint
 
-Total custom backend code at MVP: **one Cloudflare Worker** (signed URLs + upload validation) and **Firestore security rules**. Optionally a couple of Firebase Functions for fan-out push notifications (Blaze plan has a permanent free allowance covering millions of invocations; a card on file is required but beta usage bills $0). Everything else is client code — which is exactly what we want for incremental Claude-built development: one language, one repo, minimal deployed surface.
+One Cloudflare Worker (signed URLs, upload validation, quotas), Firestore security rules, and later a tiny scheduled Worker for archival. Everything else is client TypeScript — one language across app, worker, and tooling, ideal for incremental Claude-built sessions.
 
 ## Repo layout (target)
 
 ```
 TagAlong/
-├── project.yml              # XcodeGen definition
-├── App/                     # SwiftUI app target
-│   ├── Features/            # Feed, TagDetail, Record, Profile…
-│   ├── DesignSystem/        # Colors, type, components (from doc 05)
-│   └── Services/            # Auth, TagStore, MediaClient, PushService
-├── Packages/
-│   ├── RecordingEngine/     # E1 — capture, monitoring, sync (pure AV, no UI)
-│   └── CompositionKit/      # E2 — collage compositing & export
-├── Worker/                  # Cloudflare Worker (TypeScript, ~1 file)
-├── firebase/                # Firestore rules, indexes
-└── docs/                    # These documents
+├── app/                      # Vite + React PWA
+│   ├── src/features/         # feed, tag, record, learn, profile
+│   ├── src/engine/           # recording & sync (UI-free, heavily tested)
+│   ├── src/player/           # synchronized grid playback + export
+│   └── src/design/           # tokens, components (from doc 05)
+├── worker/                   # Cloudflare Worker (signed URLs, quotas)
+├── firebase/                 # rules, indexes
+├── e2e/                      # Playwright tests (incl. fake-media recording tests)
+└── docs/
 ```
 
-`RecordingEngine` and `CompositionKit` are local Swift packages with their own unit tests — isolatable, testable without the app, and perfect units for independent Claude build sessions.
+`src/engine` and `src/player` are pure-logic modules with their own test suites — the same isolation the v1 plan gave `RecordingEngine`/`CompositionKit`, so independent build sessions stay independent.
+
+## The native escape hatch (pre-decided, so it's never a crisis)
+
+If beta users on iPhones can't get acceptable sync even with the nudge slider, the plan is **not** a rewrite: keep the entire app as-is, wrap with Capacitor, and implement `src/engine`'s interface as a native Swift plugin (AVAudioEngine, exactly the v1 architecture — see doc 04 appendix). That decision point is Checkpoint 4, with real-device evidence either way.

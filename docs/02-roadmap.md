@@ -1,73 +1,72 @@
 # 02 — MVP Scope & Roadmap
 
+*v2 — revised for web-first delivery and the performances model.*
+
 ## Guiding principle
 
 The MVP must nail **one magic moment**: *you sang a part alone in your kitchen, and a week later four faces are locking a chord together in a video you can't stop rewatching.* Everything that doesn't serve that moment gets cut from Phase 1.
 
-## MVP definition (Phase 1)
+## MVP definition (Phase 1 — web app, $0 spend)
 
 ### In
 
 | Area | Scope |
 |---|---|
-| Auth | Sign in with Apple (primary), email/password (fallback). 13+ age gate. |
-| Start a tag | Title + optional info, voicing preset (TTBB/SSAA/mixed labels, exactly 4 parts), pick your part, pick key, pitch pipe, 4-beat count-in, record up to 60s video |
-| Join a tag | Headphone pre-flight check, hear featured takes of existing parts while recording, automatic latency compensation + manual nudge slider (±250 ms), re-record until happy |
-| Takes | Multiple takes per open slot; creator features one; contributor can delete own take |
-| Compositing | On-device 2×2 collage (720p HEVC), waveform-accurate mix, TagAlong watermark, save/share sheet |
-| Feed | "Open tags" (needs your part!) and "Completed" lists; tag detail page with playback |
-| Invites | Universal links; unauthenticated visitors land on App Store page |
-| Social minimum | Profiles, likes, report/block, push notifications (part added, tag complete, take featured) |
-| Ops | Crash reporting, basic analytics, feature flags |
+| Platform | PWA at a free `*.pages.dev` URL; tier-1 targets: **iOS Safari, Android Chrome**; installable to home screen |
+| Auth | Google + email sign-in, 13+ age gate |
+| Start a tag | Voicing preset (TTBB/SSAA/mixed), part pick, key pick, pitch pipe, 4-beat count-in, record ≤60 s |
+| Join a tag | Headphone pre-flight (+ bleed self-test), combination picker (default: top take per part), guide mix in earbuds while recording, auto latency compensation + click self-calibration + **manual nudge slider**, re-record freely |
+| Model | Tags → takes → performances (organic completion, no approvals — doc 01); take deletion by owner |
+| Playback | Synchronized multi-video grid player; guide waveform timeline with playhead on record screen (entry cue v1) |
+| Learning basics | Per-part solo/mute mixer, section loop, slow-down (pitch-preserved) |
+| Export/share | Client-rendered 720p watermarked collage + open-slot end-card; share links just work (the app is the web player) |
+| Feed | Open tags (filter by part needed/voicing) + Performances, ranked by recency + like-rate |
+| Social minimum | Profiles with credit stats, likes, report/block, notifications (web push where supported + email fallback) |
+| Ops | Sentry, analytics, feature flags, CI + preview deploys per PR |
 
-### Out (deferred, with the phase they land in)
+### Out (deferred)
 
-- Tag catalog / sheet music / learning tracks → **P2**
-- Comments, follows → **P2**
-- Re-tag version trees → **P2** (data model supports it from day 1; UI comes later)
-- Web playback of share links → **P2**
-- Groups/quartets, challenges, competitions → **P3**
-- Variable part counts (2–8) → **P3**
-- Android, iPad-optimized layout → post-PMF
-- Subscriptions/paywalls → deliberately absent from MVP (see doc 03)
+- barbershoptags.com catalog, part-predominant learning mixes, entry markers → **P2**
+- Comments, follows, performance family-tree UI → **P2**
+- **Store packaging (Capacitor, iOS/Android)** → its own phase, gated on validation *and your go-ahead to spend* ($99 Apple / $25 Google)
+- Groups, challenges, competitions → **P3**
+- 5–8 part tags → **P3** (data model ready from day 1)
+- Monetization → absent until costs demand (doc 03)
 
-### MVP success criteria (how we'll know it works)
+### MVP success criteria
 
-- A brand-new user can go from install → published part in **under 3 minutes**
-- ≥ 40% of started tags reach completion within 7 days (the join loop works)
-- Sync quality: parts align within ±20 ms after calibration on AirPods (the audio pipeline works)
-- Organic installs traceable to shared videos/links (the growth loop works)
+- Install-free: stranger clicks a shared link → watches instantly; signs up → published take in **under 3 minutes**
+- ≥ 40% of started tags reach a first complete performance within 7 days
+- Sync: ±20 ms after nudge on iPhone Safari + AirPods (the whole ballgame)
+- Shared links traceably drive new signups
 
 ## Phases
 
-### Phase 0 — Foundations *(1 checkpoint)*
-Xcode project scaffolding, CI (GitHub Actions: build + test + lint), design system tokens as Swift code, Firebase/R2 project setup, TestFlight pipeline. **Deliverable: empty app that builds, tests, and ships to TestFlight automatically.**
+### Phase 0 — Foundations
+Vite/React/TS scaffold, design tokens, CI (lint/test/build + Cloudflare Pages preview deploys), Firebase + R2 + Worker setup. **Deliverable: skeleton PWA live at a URL on every commit.**
 
-### Phase 1 — MVP *(the bulk of the work; ~5 epics, see below)*
-**Deliverable: TestFlight beta to a real barbershop chapter.**
+### Phase 1 — MVP (epics → GitHub milestones at CP3)
 
-Epic breakdown (each becomes a GitHub milestone at Checkpoint 3):
+1. **E1 — Recording & sync engine** (`src/engine`): capture, guide playback, pitch pipe, count-in, latency comp, click self-calibration, nudge. *Riskiest code; built first as a bare test harness, validated on real phones (CP4).*
+2. **E2 — Player & export** (`src/player`): synchronized grid, drift correction, solo/mute mixer, loop/slow-down, WebCodecs/ffmpeg.wasm export with watermark
+3. **E3 — Backend & data**: auth, Firestore model + rules, Worker (signed URLs/quotas), notifications
+4. **E4 — Core UI**: feed, tag detail, start/join flows, learning panel, profiles (from locked designs)
+5. **E5 — Social minimum & beta**: likes, report/block, invite links, PWA polish, beta rollout to a real chapter
 
-1. **E1 — Recording engine**: capture session, audio engine, pitch pipe, count-in, monitoring, latency calibration. *The riskiest code — built and validated first, as a standalone test harness before any UI polish.*
-2. **E2 — Compositing & export**: multi-video composition, audio mix, watermark, export
-3. **E3 — Backend & sync**: auth, Firestore data model, R2 upload/download, security rules, push
-4. **E4 — Core UI**: feed, tag detail, start/join flows, profiles (SwiftUI, from the locked designs)
-5. **E5 — Social minimum & release**: likes, report/block, invite links, App Store submission prep
-
-### Phase 2 — Social depth *(post-beta feedback)*
-Catalog, learning tracks, comments/follows, re-tag UI, web playback pages.
+### Phase 2 — Depth
+Catalog integration, entry markers, comments/follows, family trees, ranking v2. **Store packaging (Capacitor)** slots here when: retention holds, sync quality proven, and you approve the developer-account spend.
 
 ### Phase 3 — Community & events
-Groups, weekly challenges, competitions, flexible voicings. Monetization ships here **if and only if** costs demand it (doc 03).
+Groups, weekly challenges, competitions, 5–8 parts, monetization if needed.
 
 ## Checkpoint cadence (you + me)
 
 | Checkpoint | Gate | You review |
 |---|---|---|
-| **CP1 (now)** | Plan approval | These docs + prototypes → answer doc 06 |
-| **CP2** | Plan locked | Revised docs, final designs, final data model |
+| **CP1** ✅ | Plan direction | Docs v1 + prototypes |
+| **CP2 (now)** | Plan locked | These v2 docs — remaining questions in doc 06 |
 | **CP3** | Issues created | GitHub epics/issues/milestones for Phase 0–1 |
-| **CP4** | E1 spike demo | Video proof the sync pipeline works on a real device |
-| **CP5+** | Per-epic PRs | Working builds via TestFlight |
+| **CP4** | E1 spike proof | Video of two phones' takes locking in sync (web engine) — go/no-go on native escape hatch |
+| **CP5+** | Per-epic PRs | Working preview URLs per PR |
 
-> **Note on CP4:** E1 (recording/sync) is the only genuinely hard engineering in this app. We prove it early with a throwaway-quality test harness on real hardware before investing in everything else. If sync quality can't be achieved, the product pivots (e.g., audio-only alignment tooling) — better to know in week one.
+> **CP4 is the project's only real technical risk.** Everything else is standard product engineering. We spend the first build sessions there on purpose.

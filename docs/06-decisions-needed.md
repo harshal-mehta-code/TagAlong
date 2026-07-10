@@ -1,57 +1,43 @@
-# 06 — Checkpoint 1: Decisions Needed From You
+# 06 — Checkpoint 2: Decisions & Status
 
-Answer inline, in a PR comment, or just tell the next Claude session "doc 06: 1a, 2b, …". Every question has my recommendation marked **(rec)** — "all recommendations" is a valid one-line answer.
+*v2 — CP1 feedback incorporated. Resolved items recorded for the project log; open items below need your word to lock the plan.*
 
-## Product
+## ✅ Resolved at Checkpoint 1 (your feedback → plan changes)
 
-**1. The "takes" model** — multiple people can record the same open slot; the creator picks the featured take (doc 01).
-   a. **(rec)** Yes, takes + creator curation
-   b. First-come-first-served slots (simpler, but one bad take ruins a tag)
-   c. Creator approves each take *before* it appears at all (more control, more friction)
+| # | Decision | Outcome |
+|---|---|---|
+| 1 | Slot model | **Combinatorial performances** (your proposal): takes are open to all, every completed combination becomes its own feed post, engagement ranks them. No approvals. Docs 01/04 rebuilt around this. |
+| 2 | Platform & cost | **Web-first PWA** ($0 to fully working product), Capacitor packaging for App/Play Store only after validation and your explicit go-ahead to spend. Doc 03 rebuilt. |
+| 3 | Learning | Elevated to a core loop: solo/mute mixer, loop, slow-down in **MVP**; part-predominant mixes + **barbershoptags.com API** integration in P2. |
+| 4 | Part counts | 4 parts at MVP; data model is part-count-agnostic (`parts[]`) so 5–8 parts is P3 UI work, not a migration. |
+| 5 | Entry cues | MVP: count-in + guide waveform timeline with playhead; P2: onset-detected entry markers with "in 2…1…" flash; P3: lyric cues. |
+| — | Design direction | Approved ("looks pretty nice") — identity carries over to the web app unchanged. |
 
-**2. Anonymous/random joining scope for MVP** — "find a random tag and tag along" is core to your vision.
-   a. **(rec)** All public tags are open to anyone from day one; creator can set invite-only per tag
-   b. MVP is invite-only; open/random joining comes in Phase 2 once moderation is proven
+## ❓ Open — please answer to lock CP2
 
-**3. Voicing labels at MVP:** TTBB + SSAA + mixed presets (all are 4 parts; just labels/part names)?
-   a. **(rec)** All three presets — near-zero extra cost, doubles the addressable community
-   b. TTBB only, add others later
+**1. Web-first confirmation.** Doc 03 lays out the honest trade-offs (biggest: iOS Safari recording quality risk, mitigated by nudge slider + native-plugin escape hatch; biggest win: $0 and share-links-just-work). **Confirm web-first, or push back.** *(My rec: confirm.)*
 
-**4. Max tag length:** a. **(rec)** 60 s free (real tags fit), longer for Pro later · b. 90 s for everyone
+**2. Cost ceiling.** Still open from CP1: what monthly spend triggers "ship monetization"? *(My planning assumption: ~$25/mo.)*
 
-## Business
+**3. Beta audience.** Do you have a barbershop chapter / tag-singing circle you can recruit ~10–50 beta testers from when Phase 1 ships? (Shapes how much onboarding polish MVP needs.)
 
-**5. Cost ceiling.** The stack is ~$0 until roughly 1–2k users, then single-digit $/mo (doc 03). What monthly spend are you comfortable with before we're *forced* to ship monetization? (My planning assumption: **~$25/mo** trigger.)
+**4. Auth providers for web MVP:** a. **(rec)** Google + email · b. email-only · c. also Facebook (the community lives in Facebook groups — could add in P2 when share loops mature)
 
-**6. Apple Developer account ($99/yr)** — the one unavoidable cost. Do you already have one? (Needed by Phase 0 for TestFlight; also determines the app's bundle ID / team.)
+**5. barbershoptags.com outreach.** P2 integration should respect their API terms and ideally a friendly heads-up to the maintainer. Do you want to own that outreach when the time comes, or should a session draft the note for you? *(No action needed until P2.)*
 
-**7. Monetization philosophy** (Phase 3, only if needed):
-   a. **(rec)** Freemium sub: core loops free forever; Pro = 1080p/no watermark/unlimited active tags/competition hosting
-   b. Fully free as long as humanly possible, decide later under pressure
-   c. Something else (tips? one-time unlock?)
+**6. Name check.** "TagAlong" — locked? Worth a 10-minute trademark/App-Store/domain sweep before CP3 bakes it into URLs and watermarks. A free `tagalong.pages.dev`-style subdomain starts us; custom domain (~$15/yr) is optional until launch. Buy one now or stay free? *(My rec: stay free until beta.)*
 
-## Technical
-
-**8. Firebase (Auth/Firestore/FCM) + Cloudflare R2 + one Worker** as the backend (doc 03)?
-   a. **(rec)** Yes
-   b. Prefer a different stack (say which)
-
-**9. Bluetooth sync fallback.** AirPods latency means MVP guarantees alignment via a **manual nudge slider** with auto-compensation getting close; fully-automatic alignment (onset correlation) lands in Phase 2 (doc 04). Acceptable for MVP?
-   a. **(rec)** Yes — nudge slider is fine for beta
-   b. No — automatic alignment is a launch requirement (adds meaningful time to E1)
-
-**10. Min iOS version:** a. **(rec)** iOS 17 · b. iOS 16 (older device reach, some API cost)
-
-## Design
-
-**11. Direction check** (see prototypes): warm ivory/plum/brass identity, part-color system, songbook-serif tag titles, always-dark record flow. Right direction, or push another way (more playful? more minimal/clinical? more vintage?)
-
-**12. The name "TagAlong"** — locked? (Affects bundle ID, universal-link domain — e.g. `tagalong.app`-style domain, ~$15–30/yr — and watermark design. Worth a quick App Store search for conflicts before CP2.)
-
-## Process
-
-**13. Checkpoint approvals** happen via: a. **(rec)** you comment on the PR / repo and start the next session with your answers · b. GitHub issues per decision
+**7. Anything you'd cut or add to the MVP table in doc 02** before it becomes ~40 GitHub issues at CP3?
 
 ---
 
-*After your answers: CP2 locks these into the docs, finalizes the data model and designs, then CP3 generates the full GitHub epic/issue breakdown for the build sessions.*
+## Previously resolved (CP1, unchanged)
+
+- Public tags open to anyone from day one; per-tag invite-only option ✔
+- TTBB + SSAA + mixed presets at MVP ✔
+- 60 s cap free tier ✔
+- Freemium-sub philosophy if monetization ever needed ✔
+- Firebase + R2 + Worker backend ✔ (now serving a web client)
+- Nudge-slider sync acceptable for MVP ✔ (now with click self-calibration bonus)
+
+*Next: your answers → CP3 generates the full epic/issue breakdown for the build sessions.*
