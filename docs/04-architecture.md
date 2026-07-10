@@ -102,4 +102,4 @@ Client asks the Worker for a signed PUT (verifies Firebase ID token, size/quota 
 
 ## Appendix: the native escape hatch (from v1)
 
-If iOS Safari recording can't hit E1 exit criteria, wrap with Capacitor and implement `src/engine`'s TypeScript interface as a native plugin: `AVAudioSession` (`.playAndRecord`, `.measurement`), `AVAudioEngine` guide playback + capture on host-time clock, reported `inputLatency + outputLatency` compensation. The v1 doc's full native pipeline is preserved in git history (`docs/04-architecture.md` @ tag `checkpoint-1`) as the implementation spec for that plugin.
+If iOS Safari recording can't hit E1 exit criteria, wrap with Capacitor and implement `src/engine`'s TypeScript interface as a native plugin: `AVAudioSession` (`.playAndRecord`, `.measurement`), `AVAudioEngine` guide playback + capture on host-time clock, reported `inputLatency + outputLatency` compensation. The v1 doc's full native pipeline is preserved in git history (`docs/04-architecture.md` @ commit `222191e`, the Checkpoint 1 commit) as the implementation spec for that plugin.
