@@ -14,7 +14,7 @@ const COUNT_IN_MS = COUNT_IN_CLICKS * CLICK_INTERVAL_SEC * 1000
  * ±250 ms nudge slider applied live. "Sounds locked" saves; re-record discards.
  */
 export function SyncCheck({
-  result, part, guides, parts, onSave, onRetake, saving,
+  result, part, guides, parts, onSave, onRetake, onDiscard, saving,
 }: {
   result: RecordingResult
   part: PartId
@@ -22,6 +22,7 @@ export function SyncCheck({
   parts: PartId[]
   onSave: (nudgeMs: number) => void
   onRetake: () => void
+  onDiscard?: () => void
   saving: boolean
 }) {
   const [nudge, setNudge] = useState(0)
@@ -31,7 +32,8 @@ export function SyncCheck({
   const guideRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const userUrl = useMemo(() => URL.createObjectURL(result.blob), [result.blob])
 
-  const loopStartMs = Math.max(0, COUNT_IN_MS - 700)
+  // start just after the last click's decay so count-in bleed isn't audible
+  const loopStartMs = Math.max(0, COUNT_IN_MS - 150)
   const loopEndMs = COUNT_IN_MS + Math.min(result.sungDurationMs, 20_000) // review loops first 20 s
 
   useEffect(() => () => URL.revokeObjectURL(userUrl), [userUrl])
@@ -128,12 +130,22 @@ export function SyncCheck({
         </div>
       </div>
 
-      <div className="flex gap-2.5 mt-6 mb-6">
+      <div className="flex gap-2.5 mt-6">
         <Button kind="ghost-dark" onClick={onRetake} className="flex-1" testId="retake">Re-record</Button>
         <Button color="#5E8C6E" onClick={() => onSave(nudge)} disabled={saving} className="flex-[1.4]" testId="save-take">
           {saving ? 'Saving…' : 'Sounds locked ✓'}
         </Button>
       </div>
+      {onDiscard && (
+        <button
+          data-testid="discard-take"
+          onClick={() => { if (window.confirm('Discard this take? It won\'t be saved.')) onDiscard() }}
+          className="text-center text-[12px] font-semibold text-[#776b85] underline underline-offset-2 mt-4 mb-6"
+        >
+          Discard take
+        </button>
+      )}
+      {!onDiscard && <div className="mb-6" />}
     </div>
   )
 }

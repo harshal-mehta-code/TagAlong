@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useApp } from '../../appContext'
 import { Button, Screen } from '../../components/ui'
 import { ensureRunning, playPitch } from '../../engine/audio'
-import { decodeGuide, type GuideClip } from '../../engine/recorder'
 import { performanceFromCombo } from '../../store/localStore'
 import { newId } from '../../store/perfId'
 import { PART_COLOR, PART_LABEL, type PartId, type Tag, type Take } from '../../types'
@@ -16,6 +15,8 @@ type Step = 'preflight' | 'record' | 'review' | 'celebrate'
 /**
  * Join an open part (or swap-in on a filled one). Guide combination comes
  * from ?combo=takeId,takeId — defaulting to the first take of each other part.
+ * Guides play as synced <video> elements on the record screen: you see and
+ * hear the quartet you're joining.
  */
 export default function JoinFlow() {
   const { tagId, part } = useParams<{ tagId: string; part: PartId }>()
@@ -24,12 +25,12 @@ export default function JoinFlow() {
   const nav = useNavigate()
   const [tag, setTag] = useState<Tag | null>(null)
   const [guides, setGuides] = useState<Take[]>([])
-  const [clips, setClips] = useState<GuideClip[]>([])
   const [step, setStep] = useState<Step>('preflight')
   const [headphonesOk, setHeadphonesOk] = useState(false)
   const [saving, setSaving] = useState(false)
   const [completedPerfId, setCompletedPerfId] = useState<string | null>(null)
   const [loadError, setLoadError] = useState(false)
+  const guideEls = useRef<Record<string, HTMLVideoElement | null>>({})
 
   useEffect(() => {
     let alive = true
@@ -47,30 +48,14 @@ export default function JoinFlow() {
         for (const k of takes) if (k.part !== part && !byPart.has(k.part)) byPart.set(k.part, k)
         guideTakes = [...byPart.values()]
       }
-      const decoded: GuideClip[] = []
-      for (const g of guideTakes) {
-        const blob = await store.getMedia(g.takeId)
-        if (!blob) continue
-        try {
-          decoded.push({
-            takeId: g.takeId,
-            buffer: await decodeGuide(blob),
-            mediaOffsetMs: g.mediaOffsetMs,
-            nudgeMs: g.nudgeMs,
-          })
-        } catch {
-          // media that fails to decode is skipped; recording proceeds without it
-        }
-      }
       if (!alive) return
       setTag(t)
       setGuides(guideTakes)
-      setClips(decoded)
     })()
     return () => { alive = false }
   }, [store, tagId, part, params])
 
-  const rec = useTakeRecording(clips)
+  const rec = useTakeRecording(guides, guideEls)
   const parts = useMemo(() => tag?.parts ?? [], [tag])
 
   const save = async (nudgeMs: number) => {
@@ -127,8 +112,8 @@ export default function JoinFlow() {
           <div className="bg-curtain-card border border-curtain-line rounded-card p-5">
             <h3 className="font-serif text-lg font-semibold mb-3">Before you sing</h3>
             <ol className="text-[13.5px] text-[#A99FB6] leading-relaxed space-y-2.5 list-decimal pl-4">
-              <li><b className="text-[#F0EAE0]">Put on headphones.</b> You'll hear the {guides.length === 1 ? 'other part' : guides.length > 1 ? `other ${guides.length} parts` : 'other parts'} while you record — without headphones they'd bleed into your mic.</li>
-              <li>Tap the pitch pipe to hear <b className="text-[#F0EAE0]">{tag.key}</b>, find your note.</li>
+              <li><b className="text-[#F0EAE0]">Put on headphones.</b> You'll see and hear the {guides.length === 1 ? 'other part' : guides.length > 1 ? `other ${guides.length} parts` : 'other parts'} while you record — without headphones they'd bleed into your mic.</li>
+              <li>The pitch pipe is on the record screen — tap it any time before you start.</li>
               <li>Four clicks count you in, then everyone's singing.</li>
               <li>If your timing feels off afterwards, the nudge slider fixes it.</li>
             </ol>
@@ -176,6 +161,11 @@ export default function JoinFlow() {
         <RecordPanel
           state={rec.state}
           part={part}
+          parts={parts}
+          guides={guides}
+          guideEls={guideEls}
+          pitchKey={tag.key}
+          octaveShift={tag.voicing === 'ssaa' ? 1 : 0}
           onBegin={() => void rec.begin()}
           onStop={() => { void rec.stop().then(() => setStep('review')) }}
           onRetryPermission={rec.retryPermission}
@@ -191,6 +181,7 @@ export default function JoinFlow() {
           saving={saving}
           onSave={(n) => void save(n)}
           onRetake={() => { rec.reset(); setStep('record') }}
+          onDiscard={() => nav(`/t/${tag.tagId}`, { replace: true })}
         />
       )}
 

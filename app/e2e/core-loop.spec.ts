@@ -50,10 +50,16 @@ test('core loop: start, tag along ×3, performance completes and plays', async (
   await expect(page.getByTestId('join-bass')).toBeVisible()
 
   // --- join the remaining three parts
+  let expectedGuides = 1 // lead exists when tenor joins; grows each round
   for (const part of ['tenor', 'bari', 'bass'] as const) {
     await page.getByTestId(`join-${part}`).click()
     await page.getByTestId('headphones-check').check()
     await page.getByTestId('to-record').click()
+    // record screen shows the guide parts as videos alongside the camera
+    await expect(page.getByTestId('record-button')).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('video')).toHaveCount(1 + expectedGuides)
+    await expect(page.getByTestId('record-pitch-pipe')).toBeVisible()
+    expectedGuides += 1
     await recordCurrentPart(page)
     await page.getByTestId('save-take').click()
     if (part === 'bass') {
@@ -105,4 +111,27 @@ test('learning mode: solo a part on tag detail', async ({ page }) => {
   await expect(page.getByTestId('solo-lead')).toBeVisible()
   await page.getByTestId('solo-lead').click()
   await expect(page.getByTestId('solo-lead')).toContainText('only')
+})
+
+test('cleanup: delete own take and delete tag', async ({ page }) => {
+  page.on('dialog', (d) => void d.accept())
+  await page.goto('/')
+  await page.getByTestId('onboard-name').fill('Cleaner')
+  await page.getByTestId('onboard-go').click()
+  await page.getByTestId('empty-start').click()
+  await page.getByTestId('tag-title').fill('Doomed Tag')
+  await page.getByTestId('to-record').click()
+  await recordCurrentPart(page)
+  await page.getByTestId('save-take').click()
+  await expect(page).toHaveURL(/\/t\//, { timeout: 15_000 })
+
+  // delete my own take → slot reopens
+  await page.getByTestId('delete-take-lead-0').click()
+  await expect(page.getByTestId('join-lead')).toBeVisible()
+
+  // creator deletes the whole tag → back to empty feed
+  await page.getByTestId('delete-tag').click()
+  await expect(page).toHaveURL(/#\/$/, { timeout: 10_000 })
+  await page.getByTestId('tab-open').click()
+  await expect(page.getByTestId('empty-start-open')).toBeVisible()
 })

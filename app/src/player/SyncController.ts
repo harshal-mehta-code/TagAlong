@@ -83,20 +83,34 @@ export class SyncController {
     }
   }
 
+  private overLimit: Record<string, number> = {}
+
   private loop = (): void => {
     if (!this._playing) return
     const now = performance.now()
     this.onTick?.(this.masterMs)
-    if (now - this.lastCheck > 400) {
+    // Single track free-runs: no correction needed against a wall clock, and
+    // seeking freshly-recorded blobs is expensive (choppy playback on device).
+    if (now - this.lastCheck > 400 && this.tracks.length > 1) {
       this.lastCheck = now
       const masterMs = this.masterMs
       for (const t of this.tracks) {
         if (t.el.readyState < 2) continue
         const expected = mediaTimeForMasterMs(masterMs, t.mediaOffsetMs, t.nudgeMs)
         const action = driftCorrection(t.el.currentTime, expected)
-        if (action.kind === 'seek') t.el.currentTime = action.toSec
-        else if (action.kind === 'rate') t.el.playbackRate = this.rate * action.rate
-        else t.el.playbackRate = this.rate
+        if (action.kind === 'seek') {
+          // require the error to persist across two checks before hard-seeking —
+          // one-off decoder hiccups otherwise cause seek thrash
+          this.overLimit[t.id] = (this.overLimit[t.id] ?? 0) + 1
+          if (this.overLimit[t.id] >= 2) {
+            t.el.currentTime = action.toSec
+            this.overLimit[t.id] = 0
+          }
+        } else {
+          this.overLimit[t.id] = 0
+          if (action.kind === 'rate') t.el.playbackRate = this.rate * action.rate
+          else t.el.playbackRate = this.rate
+        }
       }
     }
     this.raf = requestAnimationFrame(this.loop)

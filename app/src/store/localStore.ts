@@ -15,7 +15,10 @@ export interface DataStore {
   listTags(): Promise<Tag[]>
   addTake(take: Take, media: Blob): Promise<void>
   updateTakeNudge(takeId: string, nudgeMs: number): Promise<void>
+  /** Removes the take, its media, and any performances containing it. */
   deleteTake(takeId: string): Promise<void>
+  /** Removes the tag and everything under it: takes, media, performances. */
+  deleteTag(tagId: string): Promise<void>
   listTakes(tagId: string): Promise<Take[]>
   getTake(takeId: string): Promise<Take | undefined>
   getMedia(takeId: string): Promise<Blob | undefined>
@@ -91,9 +94,29 @@ export class LocalStore implements DataStore {
 
   async deleteTake(takeId: string): Promise<void> {
     const db = await this.dbp
-    const tx = db.transaction(['takes', 'media'], 'readwrite')
+    const tx = db.transaction(['takes', 'media', 'performances'], 'readwrite')
     await tx.objectStore('takes').delete(takeId)
     await tx.objectStore('media').delete(takeId)
+    const perfs = (await tx.objectStore('performances').getAll()) as Performance[]
+    for (const p of perfs) {
+      if (Object.values(p.takeIds).includes(takeId)) {
+        await tx.objectStore('performances').delete(p.perfId)
+      }
+    }
+    await tx.done
+  }
+
+  async deleteTag(tagId: string): Promise<void> {
+    const db = await this.dbp
+    const takes = (await db.getAllFromIndex('takes', 'byTag', tagId)) as Take[]
+    const perfs = (await db.getAllFromIndex('performances', 'byTag', tagId)) as Performance[]
+    const tx = db.transaction(['tags', 'takes', 'media', 'performances'], 'readwrite')
+    await tx.objectStore('tags').delete(tagId)
+    for (const t of takes) {
+      await tx.objectStore('takes').delete(t.takeId)
+      await tx.objectStore('media').delete(t.takeId)
+    }
+    for (const p of perfs) await tx.objectStore('performances').delete(p.perfId)
     await tx.done
   }
 

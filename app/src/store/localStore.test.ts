@@ -103,11 +103,35 @@ describe('LocalStore', () => {
     expect(p!.likeCount).toBe(0)
   })
 
-  it('deleting a take removes its media', async () => {
+  it('deleting a take removes its media and performances containing it', async () => {
     await store.addTake(makeTake('bass', 't9'), blob())
+    await store.createPerformance({
+      perfId: 'px', tagId: 'tag1', takeIds: { bass: 't9' },
+      completedByUid: 'u1', contributorUids: ['u1'], likeCount: 0, createdAt: Date.now(),
+    })
+    await store.createPerformance({
+      perfId: 'py', tagId: 'tag1', takeIds: { bass: 'other' },
+      completedByUid: 'u1', contributorUids: ['u1'], likeCount: 0, createdAt: Date.now(),
+    })
     await store.deleteTake('t9')
     expect(await store.getMedia('t9')).toBeUndefined()
     expect(await store.getTake('t9')).toBeUndefined()
+    expect(await store.getPerformance('px')).toBeUndefined()
+    expect(await store.getPerformance('py')).toBeDefined() // untouched
+  })
+
+  it('deleting a tag cascades to takes, media, and performances', async () => {
+    await store.createTag(makeTag())
+    await store.addTake(makeTake('lead', 'tl'), blob())
+    await store.createPerformance({
+      perfId: 'pz', tagId: 'tag1', takeIds: { lead: 'tl' },
+      completedByUid: 'u1', contributorUids: ['u1'], likeCount: 0, createdAt: Date.now(),
+    })
+    await store.deleteTag('tag1')
+    expect(await store.getTag('tag1')).toBeUndefined()
+    expect(await store.getTake('tl')).toBeUndefined()
+    expect(await store.getMedia('tl')).toBeUndefined()
+    expect(await store.listPerformances()).toHaveLength(0)
   })
 })
 

@@ -11,12 +11,13 @@ import { GridPlayer } from '../perf/GridPlayer'
  */
 export default function TagDetailScreen() {
   const { tagId } = useParams<{ tagId: string }>()
-  const { store } = useApp()
+  const { store, profile } = useApp()
   const nav = useNavigate()
   const [tag, setTag] = useState<Tag | null>(null)
   const [takes, setTakes] = useState<Take[]>([])
   const [selected, setSelected] = useState<Partial<Record<PartId, string>>>({})
   const [loaded, setLoaded] = useState(false)
+  const [reload, setReload] = useState(0)
 
   useEffect(() => {
     let alive = true
@@ -33,7 +34,7 @@ export default function TagDetailScreen() {
       setLoaded(true)
     })()
     return () => { alive = false }
-  }, [store, tagId])
+  }, [store, tagId, reload])
 
   const takesByPart = useMemo(() => {
     const map: Partial<Record<PartId, Take[]>> = {}
@@ -69,7 +70,22 @@ export default function TagDetailScreen() {
         <span className="text-[11px] font-bold uppercase tracking-widest text-ink-soft">
           {openParts.length > 0 ? 'Open tag' : 'Tag'}
         </span>
-        <span className="w-8" />
+        {profile?.uid === tag.creatorUid ? (
+          <button
+            data-testid="delete-tag"
+            aria-label="Delete tag"
+            className="w-8 text-right text-[15px] text-ink-soft"
+            onClick={async () => {
+              if (!window.confirm(`Delete "${tag.title}"? All takes and performances of it will be removed.`)) return
+              await store.deleteTag(tag.tagId)
+              nav('/', { replace: true })
+            }}
+          >
+            🗑
+          </button>
+        ) : (
+          <span className="w-8" />
+        )}
       </header>
 
       <div className="px-4">
@@ -103,16 +119,31 @@ export default function TagDetailScreen() {
               </div>
               <div className="flex gap-1.5 flex-wrap">
                 {list.map((k, i) => (
-                  <button
-                    key={k.takeId}
-                    data-testid={`pick-${p}-${i}`}
-                    onClick={() => setSelected((s) => ({ ...s, [p]: k.takeId }))}
-                    className={`text-[12px] font-semibold rounded-full px-3 py-1.5 border ${
-                      selected[p] === k.takeId ? 'bg-ink text-ivory border-ink' : 'text-ink-soft border-line bg-white'
-                    }`}
-                  >
-                    {k.displayName}
-                  </button>
+                  <span key={k.takeId} className={`flex items-center rounded-full border ${
+                    selected[p] === k.takeId ? 'bg-ink text-ivory border-ink' : 'text-ink-soft border-line bg-white'
+                  }`}>
+                    <button
+                      data-testid={`pick-${p}-${i}`}
+                      onClick={() => setSelected((s) => ({ ...s, [p]: k.takeId }))}
+                      className="text-[12px] font-semibold pl-3 py-1.5 pr-1.5"
+                    >
+                      {k.displayName}
+                    </button>
+                    {k.uid === profile?.uid && (
+                      <button
+                        data-testid={`delete-take-${p}-${i}`}
+                        aria-label="Delete my take"
+                        className="text-[13px] pr-2.5 pl-0.5 opacity-70"
+                        onClick={async () => {
+                          if (!window.confirm('Delete your take? Performances using it will be removed too.')) return
+                          await store.deleteTake(k.takeId)
+                          setReload((n) => n + 1)
+                        }}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </span>
                 ))}
                 <button
                   data-testid={`swapin-${p}`}

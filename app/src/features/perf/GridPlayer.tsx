@@ -6,7 +6,8 @@ import { SyncController } from '../../player/SyncController'
 import { PART_COLOR, PART_LABEL, type PartId, type Take } from '../../types'
 
 const COUNT_IN_MS = COUNT_IN_CLICKS * CLICK_INTERVAL_SEC * 1000
-const START_MS = Math.max(0, COUNT_IN_MS - 400)
+// start just past the last click's decay so count-in bleed isn't audible
+const START_MS = Math.max(0, COUNT_IN_MS - 150)
 
 /**
  * The performed collage: any subset of parts plays as one synchronized grid.

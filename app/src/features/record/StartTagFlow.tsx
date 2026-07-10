@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../../appContext'
 import { Button, PartChip, Screen } from '../../components/ui'
@@ -20,7 +20,8 @@ export default function StartTagFlow() {
   const [part, setPart] = useState<PartId>(profile?.voiceParts[0] ?? 'lead')
   const [key, setKey] = useState<Key>('B♭')
   const [saving, setSaving] = useState(false)
-  const rec = useTakeRecording([])
+  const guideEls = useRef<Record<string, HTMLVideoElement | null>>({})
+  const rec = useTakeRecording([], guideEls)
 
   const save = async (nudgeMs: number) => {
     if (!profile || !rec.state.result || saving) return
@@ -130,6 +131,11 @@ export default function StartTagFlow() {
         <RecordPanel
           state={rec.state}
           part={part}
+          parts={PART_ORDER}
+          guides={[]}
+          guideEls={guideEls}
+          pitchKey={key}
+          octaveShift={voicing === 'ssaa' ? 1 : 0}
           onBegin={() => void rec.begin()}
           onStop={() => { void rec.stop().then(() => setStep('review')) }}
           onRetryPermission={rec.retryPermission}
@@ -144,6 +150,7 @@ export default function StartTagFlow() {
           saving={saving}
           onSave={(n) => void save(n)}
           onRetake={() => { rec.reset(); setStep('record') }}
+          onDiscard={() => nav('/', { replace: true })}
         />
       )}
     </Screen>

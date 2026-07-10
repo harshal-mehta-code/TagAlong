@@ -50,6 +50,10 @@ test('capture design screenshots', async ({ page }) => {
     if (part === 'tenor') await shoot(page, '08-join-preflight')
     await page.getByTestId('headphones-check').check()
     await page.getByTestId('to-record').click()
+    if (part === 'bari') {
+      await page.getByTestId('record-button').waitFor({ timeout: 15_000 })
+      await shoot(page, '08b-join-record-grid')
+    }
     await record(page)
     await page.getByTestId('save-take').click()
     if (part === 'bass') {
