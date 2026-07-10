@@ -1,0 +1,20 @@
+# Xcode
+build/
+DerivedData/
+*.xcodeproj
+!project.yml
+xcuserdata/
+*.xcresult
+
+# SPM
+.build/
+.swiftpm/
+Package.resolved
+
+# Secrets / local config
+GoogleService-Info.plist
+.env
+*.local
+
+# macOS
+.DS_Store
