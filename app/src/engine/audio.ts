@@ -1,0 +1,102 @@
+import { KEYS, type Key } from '../types'
+
+let ctx: AudioContext | null = null
+
+/** One shared AudioContext; must be (re)started from a user gesture on iOS. */
+export function audioContext(): AudioContext {
+  if (!ctx) ctx = new AudioContext()
+  return ctx
+}
+
+export async function ensureRunning(): Promise<AudioContext> {
+  const c = audioContext()
+  if (c.state !== 'running') await c.resume()
+  return c
+}
+
+/** Reported output latency in seconds (0 where the browser doesn't say). */
+export function outputLatency(): number {
+  const c = audioContext()
+  return (c as AudioContext & { outputLatency?: number }).outputLatency || c.baseLatency || 0
+}
+
+// --- Pitch pipe -----------------------------------------------------------
+
+/** Frequencies for the pipe: F3–E4 octave (barbershop tag keys). */
+const A4 = 440
+const SEMITONE_FROM_A4: Record<Key, number> = {
+  F: -16, 'F#': -15, G: -14, 'A♭': -13, A: -12, 'B♭': -11,
+  B: -10, C: -9, 'D♭': -8, D: -7, 'E♭': -6, E: -5,
+}
+
+export function keyFrequency(key: Key, octaveShift = 0): number {
+  return A4 * Math.pow(2, (SEMITONE_FROM_A4[key] + 12 * octaveShift) / 12)
+}
+
+/** Blown-pipe timbre: two slightly detuned triangles + breath noise through a bandpass. */
+export function playPitch(key: Key, octaveShift = 0, durationSec = 1.4): void {
+  const c = audioContext()
+  const t0 = c.currentTime + 0.02
+  const f = keyFrequency(key, octaveShift)
+  const out = c.createGain()
+  out.gain.setValueAtTime(0, t0)
+  out.gain.linearRampToValueAtTime(0.35, t0 + 0.06)
+  out.gain.setValueAtTime(0.35, t0 + durationSec - 0.25)
+  out.gain.linearRampToValueAtTime(0, t0 + durationSec)
+  out.connect(c.destination)
+
+  for (const detune of [-4, 4]) {
+    const osc = c.createOscillator()
+    osc.type = 'triangle'
+    osc.frequency.value = f
+    osc.detune.value = detune
+    const g = c.createGain()
+    g.gain.value = 0.5
+    osc.connect(g).connect(out)
+    osc.start(t0)
+    osc.stop(t0 + durationSec)
+  }
+  // breath noise
+  const len = Math.floor(c.sampleRate * durationSec)
+  const buf = c.createBuffer(1, len, c.sampleRate)
+  const d = buf.getChannelData(0)
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * 0.18
+  const noise = c.createBufferSource()
+  noise.buffer = buf
+  const bp = c.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.frequency.value = f * 2
+  bp.Q.value = 6
+  noise.connect(bp).connect(out)
+  noise.start(t0)
+  noise.stop(t0 + durationSec)
+}
+
+// --- Count-in --------------------------------------------------------------
+
+export const COUNT_IN_CLICKS = 4
+export const CLICK_INTERVAL_SEC = 0.66 // ~91 bpm
+
+/**
+ * Schedule the count-in clicks. Returns the AudioContext time of the FIRST
+ * click — that instant is the master timeline's t=0 (doc 04).
+ */
+export function scheduleCountIn(startInSec = 0.35): number {
+  const c = audioContext()
+  const first = c.currentTime + startInSec
+  for (let i = 0; i < COUNT_IN_CLICKS; i++) {
+    const t = first + i * CLICK_INTERVAL_SEC
+    const osc = c.createOscillator()
+    osc.type = 'square'
+    osc.frequency.value = i === 0 ? 1568 : 1046 // downbeat rings higher
+    const g = c.createGain()
+    g.gain.setValueAtTime(0.4, t)
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.09)
+    osc.connect(g).connect(c.destination)
+    osc.start(t)
+    osc.stop(t + 0.1)
+  }
+  return first
+}
+
+export const KEY_LIST = KEYS

@@ -8,7 +8,14 @@ Ships first as a **web app (PWA)** — $0 to build, test, and share by URL — w
 
 ## Status
 
-✅ **Plan locked · Checkpoint 3 authored.** The full Phase 0–1 breakdown — 6 milestones, 42 issues with acceptance criteria and dependencies — lives in [`docs/issues/`](docs/issues/), with a playbook ([`docs/issues/README.md`](docs/issues/README.md)) for creating them on GitHub 1:1. Build sessions start with milestone M0, then the M1-07 sync spike (CP4 gate). No code yet.
+🚀 **Working local-first build in [`app/`](app/).** The full core loop runs today: start a tag (pitch pipe → count-in → video recording), tag along the other parts with the guide mix in your headphones, nudge the sync, and completed combinations become performances that play as a synchronized 4-up collage — with learn-mode (per-part solo, slow-down, loop) built in. All data lives on-device (IndexedDB) behind a `DataStore` interface the Firebase/R2 backend will implement later, so **you can test the entire experience solo** by singing every part yourself.
+
+**Try it:** the CI workflow auto-deploys to GitHub Pages on every push — but Pages requires a **public repo** (free plan). Flip the repo public (Settings → General → Change visibility) and the next push publishes to `https://<owner>.github.io/TagAlong/`.
+
+**Run locally:** `cd app && npm install && npm run dev`
+**Verify:** `npm run typecheck && npm test && npm run e2e` (unit tests + Playwright end-to-end with fake camera/mic)
+
+Planning docs remain the source of truth for what's next; the issue breakdown for the full backend-connected product lives in [`docs/issues/`](docs/issues/) with a creation playbook ([`docs/issues/README.md`](docs/issues/README.md)).
 
 ## Planning documents
 
