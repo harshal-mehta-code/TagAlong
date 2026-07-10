@@ -8,7 +8,7 @@ Ships first as a **web app (PWA)** — $0 to build, test, and share by URL — w
 
 ## Status
 
-✅ **Plan locked (Checkpoint 2 complete).** Next: Checkpoint 3 — break Phase 0–1 into GitHub epics/issues for incremental build sessions. No code yet.
+✅ **Plan locked · Checkpoint 3 authored.** The full Phase 0–1 breakdown — 6 milestones, 42 issues with acceptance criteria and dependencies — lives in [`docs/issues/`](docs/issues/), with a playbook ([`docs/issues/README.md`](docs/issues/README.md)) for creating them on GitHub 1:1. Build sessions start with milestone M0, then the M1-07 sync spike (CP4 gate). No code yet.
 
 ## Planning documents
 
