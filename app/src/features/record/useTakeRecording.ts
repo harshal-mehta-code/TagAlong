@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
+import { useApp } from '../../appContext'
 import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, audioContext, ensureRunning } from '../../engine/audio'
 import { TakeRecorder, getCameraStream, type RecordingResult } from '../../engine/recorder'
+import { StemMixer } from '../../player/StemMixer'
 import type { Take } from '../../types'
 
 export type RecordStage = 'permission' | 'ready' | 'countin' | 'recording' | 'done' | 'error'
@@ -20,13 +22,15 @@ export interface TakeRecordingState {
 }
 
 /**
- * Drives one take recording. Guide parts are the <video> elements the record
- * screen renders (registered in `guideEls`): at begin() each is started so its
- * media hits (mediaOffset + nudge) exactly at master t=0, then drift-checked
- * once. Element playback works on every browser where Web Audio decoding of
- * video blobs does not (iOS Safari).
+ * Drives one take recording. Guide AUDIO plays through the StemMixer,
+ * scheduled sample-accurately so master t=0 lands exactly on the first
+ * count-in click (with output-latency compensation). Guide VIDEOS — the
+ * elements the record screen renders into `guideEls` — are muted visuals
+ * slaved to the same timeline. The split is mandatory on iOS Safari, where
+ * only one unmuted media element can produce sound.
  */
 export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
+  const { store } = useApp()
   const [state, setState] = useState<TakeRecordingState>({
     stage: 'permission', stream: null, countdown: null, elapsedMs: 0,
     result: null, error: null, masterMs: 0,
@@ -37,6 +41,8 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
   const guideTimersRef = useRef<number[]>([])
   const timesRef = useRef<{ t0: number; singStart: number } | null>(null)
   const stopGuardRef = useRef(false)
+  const mixer = useMemo(() => new StemMixer(), [])
+  const mixerLoadedRef = useRef<Promise<void> | null>(null)
 
   const acquire = useCallback(async () => {
     try {
@@ -59,10 +65,29 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
   const stopGuides = useCallback(() => {
     for (const id of guideTimersRef.current) clearTimeout(id)
     guideTimersRef.current = []
+    mixer.pause()
     if (guideEls) {
       for (const el of Object.values(guideEls.current)) el?.pause()
     }
-  }, [guideEls])
+  }, [guideEls, mixer])
+
+  // preload guide stems so begin() starts instantly
+  useEffect(() => {
+    if (guides.length === 0) return
+    mixerLoadedRef.current = (async () => {
+      await mixer.load(
+        await Promise.all(
+          guides.map(async (g) => ({
+            id: g.takeId,
+            nudgeMs: g.nudgeMs,
+            stem: await store.getStem(g.takeId),
+            media: await store.getMedia(g.takeId),
+            mediaOffsetMs: g.mediaOffsetMs,
+          })),
+        ),
+      )
+    })()
+  }, [guides, mixer, store])
 
   useEffect(() => {
     void acquire()
@@ -70,6 +95,7 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
       cancelAnimationFrame(rafRef.current)
       recorderRef.current?.cancel()
       stopGuides()
+      mixer.destroy()
       releaseCamera()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -87,17 +113,16 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
     setState((s) => ({ ...s, stage: 'done', result, countdown: null, stream: null }))
   }, [stopGuides, releaseCamera])
 
-  const startGuides = useCallback((t0CtxTime: number) => {
+  const startGuideVideos = useCallback((t0CtxTime: number) => {
     if (!guideEls) return
     const c = audioContext()
     for (const g of guides) {
       const el = guideEls.current[g.takeId]
       if (!el) continue
+      el.muted = true // audio comes from the mixer, never the element
       const offsetSec = (g.mediaOffsetMs + g.nudgeMs) / 1000
       const leadSec = t0CtxTime - c.currentTime // time until t=0 (~0.45s)
       const startAt = offsetSec - leadSec
-      el.muted = false
-      el.volume = 1
       if (startAt >= 0) {
         el.currentTime = startAt
         void el.play().catch(() => {})
@@ -108,7 +133,7 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
         )
       }
     }
-    // one drift check after playback settles; nudge covers the rest
+    // one visual drift check after playback settles
     guideTimersRef.current.push(
       window.setTimeout(() => {
         const masterSec = c.currentTime - t0CtxTime
@@ -116,7 +141,7 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
           const el = guideEls.current[g.takeId]
           if (!el || el.paused) continue
           const expected = (g.mediaOffsetMs + g.nudgeMs) / 1000 + masterSec
-          if (Math.abs(el.currentTime - expected) > 0.06) el.currentTime = expected
+          if (Math.abs(el.currentTime - expected) > 0.08) el.currentTime = expected
         }
       }, 1500),
     )
@@ -125,12 +150,14 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
   const begin = useCallback(async () => {
     if (!streamRef.current) return
     await ensureRunning()
+    if (mixerLoadedRef.current) await mixerLoadedRef.current
     stopGuardRef.current = false
     const rec = new TakeRecorder(streamRef.current)
     recorderRef.current = rec
     const { t0CtxTime, singStartCtxTime } = await rec.start()
     timesRef.current = { t0: t0CtxTime, singStart: singStartCtxTime }
-    startGuides(t0CtxTime)
+    if (guides.length > 0) mixer.startAtT0(t0CtxTime) // sample-accurate guide audio
+    startGuideVideos(t0CtxTime)
     setState((s) => ({ ...s, stage: 'countin', countdown: COUNT_IN_CLICKS }))
 
     const tick = () => {
@@ -150,7 +177,7 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
-  }, [startGuides, stop])
+  }, [guides.length, mixer, startGuideVideos, stop])
 
   const reset = useCallback(() => {
     setState((s) => ({ ...s, stage: 'permission', result: null, elapsedMs: 0, countdown: null }))

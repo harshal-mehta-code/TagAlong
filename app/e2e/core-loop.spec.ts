@@ -80,6 +80,12 @@ test('core loop: start, tag along ×3, performance completes and plays', async (
     els.map((v) => (v as HTMLVideoElement).currentTime),
   )
   expect(times.filter((t) => t > 0).length).toBeGreaterThanOrEqual(4)
+  // audio comes from the stem mixer — every video must stay muted (the iOS
+  // one-unmuted-element rule means element audio can never mix a quartet)
+  const muted = await page.$$eval('video', (els) =>
+    els.map((v) => (v as HTMLVideoElement).muted),
+  )
+  expect(muted.every(Boolean)).toBe(true)
 
   // like it
   await page.getByTestId('perf-like').click()

@@ -13,7 +13,7 @@ export interface DataStore {
   createTag(tag: Tag): Promise<void>
   getTag(tagId: string): Promise<Tag | undefined>
   listTags(): Promise<Tag[]>
-  addTake(take: Take, media: Blob): Promise<void>
+  addTake(take: Take, media: Blob, stem?: Blob): Promise<void>
   updateTakeNudge(takeId: string, nudgeMs: number): Promise<void>
   /** Removes the take, its media, and any performances containing it. */
   deleteTake(takeId: string): Promise<void>
@@ -22,6 +22,8 @@ export interface DataStore {
   listTakes(tagId: string): Promise<Take[]>
   getTake(takeId: string): Promise<Take | undefined>
   getMedia(takeId: string): Promise<Blob | undefined>
+  /** WAV audio stem (sample 0 == master t=0), if the take has one */
+  getStem(takeId: string): Promise<Blob | undefined>
   createPerformance(perf: Performance): Promise<void>
   listPerformances(tagId?: string): Promise<Performance[]>
   getPerformance(perfId: string): Promise<Performance | undefined>
@@ -29,6 +31,11 @@ export interface DataStore {
 }
 
 const DB_NAME = 'tagalong-v1'
+
+/** Stems live in the media store beside the video, under a suffixed key. */
+function stemKey(takeId: string): string {
+  return `${takeId}:stem`
+}
 
 function open(): Promise<IDBPDatabase> {
   return openDB(DB_NAME, 1, {
@@ -78,11 +85,12 @@ export class LocalStore implements DataStore {
     return tags.sort((a, b) => b.createdAt - a.createdAt)
   }
 
-  async addTake(take: Take, media: Blob): Promise<void> {
+  async addTake(take: Take, media: Blob, stem?: Blob): Promise<void> {
     const db = await this.dbp
     const tx = db.transaction(['takes', 'media'], 'readwrite')
     await tx.objectStore('takes').put(take)
     await tx.objectStore('media').put({ takeId: take.takeId, blob: media })
+    if (stem) await tx.objectStore('media').put({ takeId: stemKey(take.takeId), blob: stem })
     await tx.done
   }
 
@@ -97,6 +105,7 @@ export class LocalStore implements DataStore {
     const tx = db.transaction(['takes', 'media', 'performances'], 'readwrite')
     await tx.objectStore('takes').delete(takeId)
     await tx.objectStore('media').delete(takeId)
+    await tx.objectStore('media').delete(stemKey(takeId))
     const perfs = (await tx.objectStore('performances').getAll()) as Performance[]
     for (const p of perfs) {
       if (Object.values(p.takeIds).includes(takeId)) {
@@ -115,6 +124,7 @@ export class LocalStore implements DataStore {
     for (const t of takes) {
       await tx.objectStore('takes').delete(t.takeId)
       await tx.objectStore('media').delete(t.takeId)
+      await tx.objectStore('media').delete(stemKey(t.takeId))
     }
     for (const p of perfs) await tx.objectStore('performances').delete(p.perfId)
     await tx.done
@@ -134,6 +144,12 @@ export class LocalStore implements DataStore {
   async getMedia(takeId: string): Promise<Blob | undefined> {
     const db = await this.dbp
     const row = await db.get('media', takeId)
+    return row?.blob
+  }
+
+  async getStem(takeId: string): Promise<Blob | undefined> {
+    const db = await this.dbp
+    const row = await db.get('media', stemKey(takeId))
     return row?.blob
   }
 

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useMediaUrl } from '../../appContext'
+import { useApp, useMediaUrl } from '../../appContext'
 import { OpenSlot, PartTag } from '../../components/ui'
-import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from '../../engine/audio'
+import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, ensureRunning } from '../../engine/audio'
 import { SyncController } from '../../player/SyncController'
+import { StemMixer } from '../../player/StemMixer'
 import { PART_COLOR, PART_LABEL, type PartId, type Take } from '../../types'
 
 const COUNT_IN_MS = COUNT_IN_CLICKS * CLICK_INTERVAL_SEC * 1000
@@ -10,8 +11,10 @@ const COUNT_IN_MS = COUNT_IN_CLICKS * CLICK_INTERVAL_SEC * 1000
 const START_MS = Math.max(0, COUNT_IN_MS - 150)
 
 /**
- * The performed collage: any subset of parts plays as one synchronized grid.
- * Learning mode is built in — per-part solo, slow-down, loop (doc 01).
+ * The performed collage. Videos are ALWAYS muted visuals slaved to the master
+ * clock; every take's audio comes from its stem, mixed in one Web Audio graph
+ * (StemMixer) — the only way multiple parts can sound together on iOS Safari.
+ * Learning mode (solo / slow-down / loop) rides the same mixer.
  */
 export function GridPlayer({
   parts, takesByPart, durationMs, onOpenSlot, quadrantOverlay, learn = true, cellHeight = 128,
@@ -25,7 +28,9 @@ export function GridPlayer({
   learn?: boolean
   cellHeight?: number
 }) {
+  const { store } = useApp()
   const controller = useMemo(() => new SyncController(), [])
+  const mixer = useMemo(() => new StemMixer(), [])
   const refs = useRef<Partial<Record<PartId, HTMLVideoElement | null>>>({})
   const [playing, setPlaying] = useState(false)
   const [solo, setSolo] = useState<PartId | null>(null)
@@ -33,54 +38,98 @@ export function GridPlayer({
   const [loop, setLoop] = useState(false)
   const loopRef = useRef(loop)
   loopRef.current = loop
+  const loadedRef = useRef(false)
+  const fallbackIdsRef = useRef<Set<string>>(new Set())
 
-  useEffect(() => () => controller.destroy(), [controller])
+  useEffect(() => () => { controller.destroy(); mixer.destroy() }, [controller, mixer])
 
   useEffect(() => {
     controller.onTick = (ms) => {
       if (ms >= durationMs + 300) {
-        if (loopRef.current) controller.seek(START_MS)
-        else { controller.pause(); controller.seek(START_MS); setPlaying(false) }
+        if (loopRef.current) {
+          controller.seek(START_MS)
+          mixer.start(START_MS)
+        } else {
+          controller.pause()
+          mixer.pause()
+          controller.seek(START_MS)
+          mixer.seek(START_MS)
+          setPlaying(false)
+        }
       }
     }
-  }, [controller, durationMs])
+  }, [controller, mixer, durationMs])
 
-  const applyAudio = (soloPart: PartId | null) => {
-    for (const p of parts) {
+  const activeTakes = useMemo(
+    () => parts.flatMap((p) => (takesByPart[p] ? [[p, takesByPart[p]!] as const] : [])),
+    [parts, takesByPart],
+  )
+
+  const ensureLoaded = async () => {
+    if (loadedRef.current) return
+    const inputs = await Promise.all(
+      activeTakes.map(async ([, take]) => ({
+        id: take.takeId,
+        nudgeMs: take.nudgeMs,
+        stem: await store.getStem(take.takeId),
+        media: await store.getMedia(take.takeId),
+        mediaOffsetMs: take.mediaOffsetMs,
+      })),
+    )
+    fallbackIdsRef.current = await mixer.load(inputs)
+    loadedRef.current = true
+  }
+
+  const applyVideoAudio = (soloPart: PartId | null) => {
+    // videos stay muted; a video is unmuted ONLY as a last-resort fallback
+    // when its take's audio couldn't be decoded into the mixer
+    for (const [p, take] of activeTakes) {
       const el = refs.current[p]
-      if (el) el.muted = soloPart !== null && soloPart !== p
+      if (!el) continue
+      const isFallback = fallbackIdsRef.current.has(take.takeId)
+      el.muted = !isFallback || (soloPart !== null && soloPart !== p)
     }
   }
 
   const toggle = async () => {
-    if (playing) { controller.pause(); setPlaying(false); return }
-    const tracks = parts.flatMap((p) => {
-      const take = takesByPart[p]
+    if (playing) {
+      controller.pause()
+      mixer.pause()
+      setPlaying(false)
+      return
+    }
+    await ensureRunning()
+    await ensureLoaded()
+    const tracks = activeTakes.flatMap(([p, take]) => {
       const el = refs.current[p]
-      return take && el
-        ? [{ id: p as string, el, mediaOffsetMs: take.mediaOffsetMs, nudgeMs: take.nudgeMs }]
-        : []
+      return el ? [{ id: p as string, el, mediaOffsetMs: take.mediaOffsetMs, nudgeMs: take.nudgeMs }] : []
     })
     if (tracks.length === 0) return
     controller.setTracks(tracks)
     controller.setRate(rate)
-    applyAudio(solo)
-    await controller.play(controller.masterMs > START_MS && controller.masterMs < durationMs ? undefined : START_MS)
+    applyVideoAudio(solo)
+    const resume = controller.masterMs > START_MS && controller.masterMs < durationMs
+    const fromMs = resume ? controller.masterMs : START_MS
+    await controller.play(fromMs)
+    mixer.start(fromMs)
     setPlaying(true)
   }
 
   const onSolo = (p: PartId) => {
     const next = solo === p ? null : p
     setSolo(next)
-    applyAudio(next)
+    const take = next ? takesByPart[next] : undefined
+    mixer.setSolo(take ? take.takeId : null)
+    applyVideoAudio(next)
   }
 
   const onRate = (r: number) => {
     setRate(r)
     controller.setRate(r)
+    mixer.setRate(r)
   }
 
-  const anyTake = parts.some((p) => takesByPart[p])
+  const anyTake = activeTakes.length > 0
 
   return (
     <div>
@@ -157,7 +206,7 @@ export function GridPlayer({
 function Cell({ take, setRef }: { take: Take; setRef: (el: HTMLVideoElement | null) => void }) {
   const url = useMediaUrl(take.takeId)
   return url ? (
-    <video ref={setRef} src={url} playsInline preload="auto" className="w-full h-full object-cover bg-curtain" />
+    <video ref={setRef} src={url} muted playsInline preload="auto" className="w-full h-full object-cover bg-curtain" />
   ) : (
     <div className="w-full h-full bg-curtain" />
   )

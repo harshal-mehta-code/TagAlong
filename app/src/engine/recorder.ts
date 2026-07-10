@@ -1,9 +1,12 @@
 import { audioContext, scheduleCountIn, COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from './audio'
 import { computeMediaOffsetMs } from './offsets'
+import { StemCapture } from './stem'
 
 export interface RecordingResult {
   blob: Blob
   mimeType: string
+  /** WAV audio stem, sample 0 == master t=0; the collage's audio source */
+  stemBlob: Blob | null
   /** position of master t=0 within the media file, ms */
   mediaOffsetMs: number
   /** length of the sung portion (after t=0 + count-in), ms */
@@ -56,6 +59,7 @@ export class TakeRecorder {
   private singStartCtxTime = 0
   private mimeType = ''
   private stopped: Promise<Blob> | null = null
+  private stemCapture: StemCapture | null = null
 
   constructor(private stream: MediaStream) {}
 
@@ -84,6 +88,11 @@ export class TakeRecorder {
     this.recorder.start()
     await started
 
+    // PCM stem capture rides the same AudioContext clock as the count-in,
+    // giving the collage a sample-accurate, decode-anywhere audio source.
+    this.stemCapture = new StemCapture(this.stream)
+    this.stemCapture.start()
+
     // Arm delay so the recorder is definitely rolling before t=0.
     this.t0CtxTime = scheduleCountIn(0.45)
     this.singStartCtxTime = this.t0CtxTime + COUNT_IN_CLICKS * CLICK_INTERVAL_SEC
@@ -93,11 +102,14 @@ export class TakeRecorder {
   async stop(): Promise<RecordingResult> {
     const c = audioContext()
     const stopCtxTime = c.currentTime
+    const stemBlob = this.stemCapture?.stop(this.t0CtxTime) ?? null
+    this.stemCapture = null
     this.recorder?.stop()
     const blob = await this.stopped!
     return {
       blob,
       mimeType: this.mimeType || blob.type,
+      stemBlob,
       mediaOffsetMs: computeMediaOffsetMs(this.recStartCtxTime, this.t0CtxTime),
       sungDurationMs: Math.max(0, (stopCtxTime - this.singStartCtxTime) * 1000),
     }

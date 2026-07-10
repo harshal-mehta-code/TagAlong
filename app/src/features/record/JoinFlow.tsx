@@ -74,7 +74,7 @@ export default function JoinFlow() {
       guideTakeIds: guides.map((g) => g.takeId),
       createdAt: Date.now(),
     }
-    await store.addTake(take, result.blob)
+    await store.addTake(take, result.blob, result.stemBlob ?? undefined)
     const perf = await performanceFromCombo(tag, take, guides)
     if (perf) {
       await store.createPerformance(perf)

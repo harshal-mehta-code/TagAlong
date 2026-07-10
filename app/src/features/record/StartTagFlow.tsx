@@ -50,7 +50,7 @@ export default function StartTagFlow() {
       createdAt: Date.now(),
     }
     await store.createTag(tag)
-    await store.addTake(take, result.blob)
+    await store.addTake(take, result.blob, result.stemBlob ?? undefined)
     nav(`/t/${tag.tagId}`, { replace: true })
   }
 

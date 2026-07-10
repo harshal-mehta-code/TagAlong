@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from '../../engine/audio'
+import { useApp, useMediaUrl } from '../../appContext'
+import { Button, Grid, PartTag } from '../../components/ui'
+import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, ensureRunning } from '../../engine/audio'
 import { clampNudgeMs } from '../../engine/offsets'
 import type { RecordingResult } from '../../engine/recorder'
+import { StemMixer } from '../../player/StemMixer'
 import { SyncController } from '../../player/SyncController'
-import { Button, Grid, PartTag } from '../../components/ui'
-import { useMediaUrl } from '../../appContext'
 import { PART_COLOR, PART_LABEL, type PartId, type Take } from '../../types'
 
 const COUNT_IN_MS = COUNT_IN_CLICKS * CLICK_INTERVAL_SEC * 1000
 
 /**
  * Post-record review: looped synced playback of (your take + guides) with the
- * ±250 ms nudge slider applied live. "Sounds locked" saves; re-record discards.
+ * ±250 ms nudge slider applied live. Audio comes from stems through one
+ * StemMixer (videos stay muted) — mandatory on iOS, where only a single
+ * unmuted media element can sound at a time.
  */
 export function SyncCheck({
   result, part, guides, parts, onSave, onRetake, onDiscard, saving,
@@ -25,9 +28,13 @@ export function SyncCheck({
   onDiscard?: () => void
   saving: boolean
 }) {
+  const { store } = useApp()
   const [nudge, setNudge] = useState(0)
   const [playing, setPlaying] = useState(false)
   const controller = useMemo(() => new SyncController(), [])
+  const mixer = useMemo(() => new StemMixer(), [])
+  const loadedRef = useRef(false)
+  const fallbackIdsRef = useRef<Set<string>>(new Set())
   const userVideoRef = useRef<HTMLVideoElement>(null)
   const guideRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const userUrl = useMemo(() => URL.createObjectURL(result.blob), [result.blob])
@@ -37,38 +44,64 @@ export function SyncCheck({
   const loopEndMs = COUNT_IN_MS + Math.min(result.sungDurationMs, 20_000) // review loops first 20 s
 
   useEffect(() => () => URL.revokeObjectURL(userUrl), [userUrl])
-  useEffect(() => () => controller.destroy(), [controller])
+  useEffect(() => () => { controller.destroy(); mixer.destroy() }, [controller, mixer])
 
   useEffect(() => {
     controller.onTick = (ms) => {
-      if (ms > loopEndMs) controller.seek(loopStartMs)
+      if (ms > loopEndMs) {
+        controller.seek(loopStartMs)
+        mixer.start(loopStartMs)
+      }
     }
-  }, [controller, loopStartMs, loopEndMs])
+  }, [controller, mixer, loopStartMs, loopEndMs])
+
+  const ensureLoaded = async () => {
+    if (loadedRef.current) return
+    const inputs = [
+      {
+        id: 'user',
+        nudgeMs: nudge,
+        stem: result.stemBlob ?? undefined,
+        media: result.blob,
+        mediaOffsetMs: result.mediaOffsetMs,
+      },
+      ...(await Promise.all(
+        guides.map(async (g) => ({
+          id: g.takeId,
+          nudgeMs: g.nudgeMs,
+          stem: await store.getStem(g.takeId),
+          media: await store.getMedia(g.takeId),
+          mediaOffsetMs: g.mediaOffsetMs,
+        })),
+      )),
+    ]
+    fallbackIdsRef.current = await mixer.load(inputs)
+    loadedRef.current = true
+  }
 
   const togglePlay = async () => {
     if (playing) {
       controller.pause()
+      mixer.pause()
       setPlaying(false)
       return
     }
+    await ensureRunning()
+    await ensureLoaded()
+    const userEl = userVideoRef.current!
+    userEl.muted = !fallbackIdsRef.current.has('user')
     const tracks = [
-      {
-        id: 'user',
-        el: userVideoRef.current!,
-        mediaOffsetMs: result.mediaOffsetMs,
-        nudgeMs: nudge,
-      },
-      ...guides
-        .filter((g) => guideRefs.current[g.takeId])
-        .map((g) => ({
-          id: g.takeId,
-          el: guideRefs.current[g.takeId]!,
-          mediaOffsetMs: g.mediaOffsetMs,
-          nudgeMs: g.nudgeMs,
-        })),
+      { id: 'user', el: userEl, mediaOffsetMs: result.mediaOffsetMs, nudgeMs: nudge },
+      ...guides.flatMap((g) => {
+        const el = guideRefs.current[g.takeId]
+        if (!el) return []
+        el.muted = !fallbackIdsRef.current.has(g.takeId)
+        return [{ id: g.takeId, el, mediaOffsetMs: g.mediaOffsetMs, nudgeMs: g.nudgeMs }]
+      }),
     ]
     controller.setTracks(tracks)
     await controller.play(loopStartMs)
+    mixer.start(loopStartMs)
     setPlaying(true)
   }
 
@@ -76,6 +109,7 @@ export function SyncCheck({
     const clamped = clampNudgeMs(v)
     setNudge(clamped)
     controller.updateNudge('user', clamped)
+    mixer.setNudge('user', clamped)
   }
 
   const guideByPart = Object.fromEntries(guides.map((g) => [g.part, g]))
@@ -87,7 +121,7 @@ export function SyncCheck({
           {parts.map((p) =>
             p === part ? (
               <div key={p} className="relative h-[108px]" style={{ border: '2px solid #D64545' }}>
-                <video ref={userVideoRef} src={userUrl} playsInline preload="auto"
+                <video ref={userVideoRef} src={userUrl} muted playsInline preload="auto"
                   className="w-full h-full object-cover [transform:scaleX(-1)] bg-curtain" />
                 <span className="absolute left-1.5 bottom-1.5 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full text-white z-10"
                   style={{ background: PART_COLOR[p] }}>you</span>
@@ -155,7 +189,7 @@ function GuideCell({ take, setRef }: { take: Take; setRef: (el: HTMLVideoElement
   return (
     <div className="relative h-[108px]">
       {url && (
-        <video ref={setRef} src={url} playsInline preload="auto" className="w-full h-full object-cover bg-curtain" />
+        <video ref={setRef} src={url} muted playsInline preload="auto" className="w-full h-full object-cover bg-curtain" />
       )}
       <PartTag part={take.part} />
     </div>
