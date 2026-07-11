@@ -21,7 +21,7 @@ export default function StartTagFlow() {
   const [key, setKey] = useState<Key>('B♭')
   const [saving, setSaving] = useState(false)
   const guideEls = useRef<Record<string, HTMLVideoElement | null>>({})
-  const rec = useTakeRecording([], guideEls)
+  const rec = useTakeRecording([], guideEls, step === 'record')
 
   const save = async (nudgeMs: number) => {
     if (!profile || !rec.state.result || saving) return

@@ -55,7 +55,7 @@ export default function JoinFlow() {
     return () => { alive = false }
   }, [store, tagId, part, params])
 
-  const rec = useTakeRecording(guides, guideEls)
+  const rec = useTakeRecording(guides, guideEls, step === 'record')
   const parts = useMemo(() => tag?.parts ?? [], [tag])
 
   const save = async (nudgeMs: number) => {

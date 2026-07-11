@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encodeWav, trimAndEncode } from './stem'
+import { encodeWav, normalizePeak, trimAndEncode } from './stem'
 
 async function wavSampleCount(blob: Blob): Promise<number> {
   const v = new DataView(await blob.arrayBuffer())
@@ -21,6 +21,27 @@ describe('encodeWav', () => {
     const v = new DataView(await blob.arrayBuffer())
     expect(v.getInt16(44, true)).toBe(0x7fff)
     expect(v.getInt16(46, true)).toBe(-0x8000)
+  })
+})
+
+describe('normalizePeak', () => {
+  it('boosts a quiet signal to the target peak', () => {
+    const s = new Float32Array([0.1, -0.05, 0.02])
+    normalizePeak(s)
+    expect(Math.max(...[...s].map(Math.abs))).toBeCloseTo(0.89, 2)
+  })
+  it('caps gain so near-silence is not blown into noise', () => {
+    const s = new Float32Array([0.01])
+    normalizePeak(s)
+    expect(s[0]).toBeCloseTo(0.12, 2) // 12x cap, not 89x
+  })
+  it('never attenuates loud signals and leaves silence alone', () => {
+    const loud = new Float32Array([0.95])
+    normalizePeak(loud)
+    expect(loud[0]).toBeCloseTo(0.95, 3)
+    const silent = new Float32Array([0, 0])
+    normalizePeak(silent)
+    expect(silent[0]).toBe(0)
   })
 })
 

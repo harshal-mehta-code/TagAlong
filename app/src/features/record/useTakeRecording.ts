@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { useApp } from '../../appContext'
-import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, audioContext, ensureRunning } from '../../engine/audio'
+import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, audioContext, ensureRunning, resetAudioContext } from '../../engine/audio'
 import { TakeRecorder, getCameraStream, type RecordingResult } from '../../engine/recorder'
 import { StemMixer } from '../../player/StemMixer'
 import type { Take } from '../../types'
@@ -29,7 +29,7 @@ export interface TakeRecordingState {
  * slaved to the same timeline. The split is mandatory on iOS Safari, where
  * only one unmuted media element can produce sound.
  */
-export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
+export function useTakeRecording(guides: Take[], guideEls?: GuideEls, enabled = true) {
   const { store } = useApp()
   const [state, setState] = useState<TakeRecordingState>({
     stage: 'permission', stream: null, countdown: null, elapsedMs: 0,
@@ -46,6 +46,8 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
 
   const acquire = useCallback(async () => {
     try {
+      // idempotent: drop any prior stream so parallel acquires never leak one
+      streamRef.current?.getTracks().forEach((t) => t.stop())
       const stream = await getCameraStream()
       streamRef.current = stream
       setState((s) => ({ ...s, stage: 'ready', stream, error: null }))
@@ -89,8 +91,21 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
     })()
   }, [guides, mixer, store])
 
+  // Hold the mic ONLY while the record step is on screen. A live mic puts
+  // iOS into a ducked play-and-record session that quiets everything else
+  // (pitch pipe on setup screens, playback after) — so acquire late,
+  // release early.
   useEffect(() => {
-    void acquire()
+    if (enabled) {
+      void acquire()
+    } else {
+      releaseCamera()
+      setState((s) => (s.stage === 'ready' ? { ...s, stage: 'permission', stream: null } : s))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled])
+
+  useEffect(() => {
     return () => {
       cancelAnimationFrame(rafRef.current)
       recorderRef.current?.cancel()
@@ -108,8 +123,10 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls) {
     stopGuides()
     const result = await recorderRef.current.stop()
     recorderRef.current = null
-    // free the camera so review playback isn't competing with a live capture
+    // free the camera so review playback isn't competing with a live capture,
+    // and rebuild the audio context to escape iOS's ducked mic session
     releaseCamera()
+    resetAudioContext()
     setState((s) => ({ ...s, stage: 'done', result, countdown: null, stream: null }))
   }, [stopGuides, releaseCamera])
 

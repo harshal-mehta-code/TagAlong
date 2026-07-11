@@ -53,7 +53,7 @@ export class StemCapture {
   }
 }
 
-/** Pure trim + WAV encode, unit-testable without an AudioContext. */
+/** Pure trim + peak-normalize + WAV encode, unit-testable without an AudioContext. */
 export function trimAndEncode(
   chunks: Float32Array[],
   firstChunkTime: number,
@@ -69,7 +69,26 @@ export function trimAndEncode(
   }
   const startSample = Math.max(0, Math.round((t0Time - firstChunkTime) * sampleRate))
   if (startSample >= total) return null
-  return encodeWav(all.subarray(startSample), sampleRate)
+  const trimmed = all.subarray(startSample)
+  normalizePeak(trimmed)
+  return encodeWav(trimmed, sampleRate)
+}
+
+/**
+ * Scale in place to a 0.89 peak (gain capped at 12× so silence isn't blown
+ * into noise). Raw mobile mic levels — AGC is off for sync fidelity — are far
+ * too quiet to play back directly; this is what makes stems audible.
+ */
+export function normalizePeak(samples: Float32Array, target = 0.89, maxGain = 12): void {
+  let peak = 0
+  for (let i = 0; i < samples.length; i++) {
+    const a = Math.abs(samples[i])
+    if (a > peak) peak = a
+  }
+  if (peak < 1e-4) return // effectively silence — leave it
+  const gain = Math.min(target / peak, maxGain)
+  if (gain <= 1) return // already loud enough; never attenuate
+  for (let i = 0; i < samples.length; i++) samples[i] *= gain
 }
 
 /** Mono 16-bit PCM WAV. */

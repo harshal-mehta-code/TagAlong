@@ -31,19 +31,44 @@ export class StemMixer {
   private tracks = new Map<string, MixerTrack>()
   private failed = new Set<string>()
   private master: GainNode | null = null
+  private ctx: AudioContext | null = null
   private playing = false
   private startedAtCtx = 0
   private fromMasterMs = 0
   private rate = 1
   private solo: string | null = null
 
+  /**
+   * (Re)build the output graph against the CURRENT shared context — it gets
+   * recreated after every recording to escape iOS's ducked mic session, and
+   * decoded AudioBuffers survive that swap while nodes do not.
+   */
+  private ensureGraph(): void {
+    const c = audioContext()
+    if (this.ctx === c && this.master) return
+    this.ctx = c
+    this.master = c.createGain()
+    // a gentle limiter so four normalized stems summing never clips
+    const limiter = c.createDynamicsCompressor()
+    limiter.threshold.value = -6
+    limiter.knee.value = 4
+    limiter.ratio.value = 12
+    limiter.attack.value = 0.002
+    limiter.release.value = 0.12
+    this.master.connect(limiter)
+    limiter.connect(c.destination)
+    for (const t of this.tracks.values()) {
+      t.gain = c.createGain()
+      t.gain.connect(this.master)
+      t.source = null
+    }
+    this.applySolo()
+  }
+
   /** Decode all tracks. Returns ids whose audio could NOT be decoded (caller may unmute that video as last resort). */
   async load(inputs: MixerTrackInput[]): Promise<Set<string>> {
     const c = audioContext()
-    if (!this.master) {
-      this.master = c.createGain()
-      this.master.connect(c.destination)
-    }
+    this.ensureGraph()
     this.failed = new Set()
     for (const input of inputs) {
       if (this.tracks.has(input.id)) {
@@ -68,7 +93,7 @@ export class StemMixer {
         continue
       }
       const gain = c.createGain()
-      gain.connect(this.master)
+      gain.connect(this.master!)
       this.tracks.set(input.id, {
         id: input.id, buffer, baseMs, nudgeMs: input.nudgeMs, gain, source: null,
       })
@@ -89,21 +114,28 @@ export class StemMixer {
 
   /** Start playback with master time = fromMasterMs at ctx time `whenCtx` (defaults to now + small guard). */
   start(fromMasterMs: number, whenCtx?: number): void {
+    this.ensureGraph()
     const c = audioContext()
     this.stopSources()
     const when = whenCtx ?? c.currentTime + 0.06
     this.startedAtCtx = when
     this.fromMasterMs = fromMasterMs
     this.playing = true
+    if (this.master) this.master.gain.value = 1
     for (const t of this.tracks.values()) {
       this.startSource(t, when, fromMasterMs)
     }
     this.applySolo()
   }
 
-  /** Schedule playback so master t=0 lands exactly at t0CtxTime (used as the guide mix while recording). */
+  /**
+   * Schedule playback so master t=0 lands exactly at t0CtxTime (the guide mix
+   * while recording). Boosted: iOS ducks all output while the mic is live,
+   * so the guide fights back a little — the limiter catches the peaks.
+   */
   startAtT0(t0CtxTime: number): void {
     this.start(0, t0CtxTime - outputLatency())
+    if (this.master) this.master.gain.value = 1.6
   }
 
   private startSource(t: MixerTrack, whenCtx: number, fromMasterMs: number): void {
@@ -175,6 +207,7 @@ export class StemMixer {
     this.stopSources()
     this.master?.disconnect()
     this.master = null
+    this.ctx = null
     this.tracks.clear()
   }
 }

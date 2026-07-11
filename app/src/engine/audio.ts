@@ -8,6 +8,18 @@ export function audioContext(): AudioContext {
   return ctx
 }
 
+/**
+ * Tear down the shared context so the next call creates a fresh one.
+ * iOS keeps the audio session in a ducked, receiver-routed "play-and-record"
+ * state after a mic capture; closing the context and starting clean is the
+ * reliable way back to full-volume media playback.
+ */
+export function resetAudioContext(): void {
+  const old = ctx
+  ctx = null
+  void old?.close().catch(() => {})
+}
+
 export async function ensureRunning(): Promise<AudioContext> {
   const c = audioContext()
   if (c.state !== 'running') await c.resume()
@@ -40,8 +52,8 @@ export function playPitch(key: Key, octaveShift = 0, durationSec = 1.4): void {
   const f = keyFrequency(key, octaveShift)
   const out = c.createGain()
   out.gain.setValueAtTime(0, t0)
-  out.gain.linearRampToValueAtTime(0.35, t0 + 0.06)
-  out.gain.setValueAtTime(0.35, t0 + durationSec - 0.25)
+  out.gain.linearRampToValueAtTime(0.9, t0 + 0.06)
+  out.gain.setValueAtTime(0.9, t0 + durationSec - 0.25)
   out.gain.linearRampToValueAtTime(0, t0 + durationSec)
   out.connect(c.destination)
 
@@ -60,7 +72,7 @@ export function playPitch(key: Key, octaveShift = 0, durationSec = 1.4): void {
   const len = Math.floor(c.sampleRate * durationSec)
   const buf = c.createBuffer(1, len, c.sampleRate)
   const d = buf.getChannelData(0)
-  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * 0.18
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * 0.12
   const noise = c.createBufferSource()
   noise.buffer = buf
   const bp = c.createBiquadFilter()
@@ -90,7 +102,7 @@ export function scheduleCountIn(startInSec = 0.35): number {
     osc.type = 'square'
     osc.frequency.value = i === 0 ? 1568 : 1046 // downbeat rings higher
     const g = c.createGain()
-    g.gain.setValueAtTime(0.4, t)
+    g.gain.setValueAtTime(0.75, t)
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.09)
     osc.connect(g).connect(c.destination)
     osc.start(t)
