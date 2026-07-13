@@ -1,3 +1,4 @@
+import { refineMediaOffsetMs } from './align'
 import { audioContext, scheduleCountIn, setAudioSessionType, COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from './audio'
 import { computeMediaOffsetMs } from './offsets'
 import { StemCapture } from './stem'
@@ -110,11 +111,23 @@ export class TakeRecorder {
     this.stemCapture = null
     this.recorder?.stop()
     const blob = await this.stopped!
+    // The `start`-event estimate misses the encoder's real start by a
+    // different amount every take. The media file and the stem hold the same
+    // mic signal, so cross-correlating them measures the true offset —
+    // this is what keeps lips and takes aligned. Estimate kept where the
+    // browser can't decode its own recording (iOS mp4).
+    let mediaOffsetMs = computeMediaOffsetMs(this.recStartCtxTime, this.t0CtxTime)
+    if (stemBlob) {
+      try {
+        const refined = await refineMediaOffsetMs(blob, stemBlob, mediaOffsetMs)
+        if (refined !== null) mediaOffsetMs = refined
+      } catch { /* alignment is best-effort */ }
+    }
     return {
       blob,
       mimeType: this.mimeType || blob.type,
       stemBlob,
-      mediaOffsetMs: computeMediaOffsetMs(this.recStartCtxTime, this.t0CtxTime),
+      mediaOffsetMs,
       sungDurationMs: Math.max(0, (stopCtxTime - this.singStartCtxTime) * 1000),
     }
   }

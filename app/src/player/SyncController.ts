@@ -67,6 +67,7 @@ export class SyncController {
     }
     this.lastCheck = performance.now() // give decoders a beat before drift checks
     this.overLimit = {}
+    this.correcting = {}
     this.loop()
   }
 
@@ -104,20 +105,23 @@ export class SyncController {
   }
 
   private overLimit: Record<string, number> = {}
+  private correcting: Record<string, boolean> = {}
 
   private loop = (): void => {
     if (!this._playing) return
     const now = performance.now()
     this.onTick?.(this.masterMs)
-    // Single track free-runs: no correction needed against a wall clock, and
-    // seeking freshly-recorded blobs is expensive (choppy playback on device).
-    if (now - this.lastCheck > 400 && this.tracks.length > 1) {
+    // With an external audio clock every video is corrected against what the
+    // listener hears — even a single video must follow it.
+    if (now - this.lastCheck > 500 && (this.tracks.length > 1 || this.clock)) {
       this.lastCheck = now
       const masterMs = this.masterMs
       for (const t of this.tracks) {
-        if (t.el.readyState < 2) continue
+        // never judge a track that is mid-seek or starved for data —
+        // correcting against a stalled decoder just causes seek thrash
+        if (t.el.readyState < 3 || t.el.seeking) continue
         const expected = mediaTimeForMasterMs(masterMs, t.mediaOffsetMs, t.nudgeMs)
-        const action = driftCorrection(t.el.currentTime, expected)
+        const action = driftCorrection(t.el.currentTime, expected, this.correcting[t.id] ?? false)
         if (action.kind === 'seek') {
           // require the error to persist across two checks before hard-seeking —
           // one-off decoder hiccups otherwise cause seek thrash
@@ -125,11 +129,13 @@ export class SyncController {
           if (this.overLimit[t.id] >= 2) {
             t.el.currentTime = action.toSec
             this.overLimit[t.id] = 0
+            this.correcting[t.id] = false
           }
         } else {
           this.overLimit[t.id] = 0
-          if (action.kind === 'rate') t.el.playbackRate = this.rate * action.rate
-          else t.el.playbackRate = this.rate
+          this.correcting[t.id] = action.kind === 'rate'
+          const target = action.kind === 'rate' ? this.rate * action.rate : this.rate
+          if (t.el.playbackRate !== target) t.el.playbackRate = target
         }
       }
     }

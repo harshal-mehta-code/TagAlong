@@ -26,15 +26,27 @@ export type DriftAction =
   | { kind: 'rate'; rate: number }
   | { kind: 'seek'; toSec: number }
 
+/**
+ * Hysteresis correction: errors inside the ±35 ms dead band are left alone
+ * (invisible for lip sync, and video clocks jitter that much anyway); past it
+ * a gentle 3% rate change pulls the track in and keeps correcting until the
+ * error falls under 12 ms; only gross errors seek. The previous symmetric
+ * 15 ms threshold sat right at clock-jitter level, so tracks oscillated
+ * between 0.97× and 1.03× every check — visible judder.
+ */
 export function driftCorrection(
   actualSec: number,
   expectedSec: number,
-  hardLimitSec = 0.06,
-  softLimitSec = 0.015,
+  correcting = false,
+  hardLimitSec = 0.15,
+  engageSec = 0.035,
+  releaseSec = 0.012,
 ): DriftAction {
   const err = actualSec - expectedSec
   if (Math.abs(err) > hardLimitSec) return { kind: 'seek', toSec: expectedSec }
-  if (Math.abs(err) > softLimitSec) return { kind: 'rate', rate: err > 0 ? 0.97 : 1.03 }
+  if (Math.abs(err) > (correcting ? releaseSec : engageSec)) {
+    return { kind: 'rate', rate: err > 0 ? 0.97 : 1.03 }
+  }
   return { kind: 'ok' }
 }
 

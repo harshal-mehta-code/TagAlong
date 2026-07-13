@@ -27,15 +27,24 @@ describe('mediaTimeForMasterMs', () => {
 })
 
 describe('driftCorrection', () => {
-  it('leaves small drift alone', () => {
+  it('leaves drift inside the ±35ms dead band alone (clock jitter territory)', () => {
     expect(driftCorrection(10.01, 10.0)).toEqual({ kind: 'ok' })
+    expect(driftCorrection(10.03, 10.0)).toEqual({ kind: 'ok' })
   })
-  it('rate-corrects moderate drift toward the target', () => {
-    expect(driftCorrection(10.03, 10.0)).toEqual({ kind: 'rate', rate: 0.97 })
-    expect(driftCorrection(9.97, 10.0)).toEqual({ kind: 'rate', rate: 1.03 })
+  it('rate-corrects once drift passes the engage threshold', () => {
+    expect(driftCorrection(10.05, 10.0)).toEqual({ kind: 'rate', rate: 0.97 })
+    expect(driftCorrection(9.95, 10.0)).toEqual({ kind: 'rate', rate: 1.03 })
   })
-  it('hard-seeks past 60ms', () => {
-    expect(driftCorrection(10.1, 10.0)).toEqual({ kind: 'seek', toSec: 10.0 })
+  it('keeps correcting until the error falls under the release threshold (hysteresis)', () => {
+    // 20ms error: ignored when idle, still corrected when already correcting
+    expect(driftCorrection(10.02, 10.0, false)).toEqual({ kind: 'ok' })
+    expect(driftCorrection(10.02, 10.0, true)).toEqual({ kind: 'rate', rate: 0.97 })
+    // under 12ms it releases either way — no 0.97/1.03 oscillation
+    expect(driftCorrection(10.01, 10.0, true)).toEqual({ kind: 'ok' })
+  })
+  it('hard-seeks only past 150ms', () => {
+    expect(driftCorrection(10.1, 10.0)).toEqual({ kind: 'rate', rate: 0.97 })
+    expect(driftCorrection(10.2, 10.0)).toEqual({ kind: 'seek', toSec: 10.0 })
   })
 })
 

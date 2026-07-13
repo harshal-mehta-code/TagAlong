@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp, useMediaUrl } from '../../appContext'
 import { Button, Grid, PartTag } from '../../components/ui'
-import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, ensureRunning, outputLatency } from '../../engine/audio'
+import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from '../../engine/audio'
 import { clampNudgeMs } from '../../engine/offsets'
 import type { RecordingResult } from '../../engine/recorder'
-import { StemMixer } from '../../player/StemMixer'
+import { CollageAudio } from '../../player/premix'
 import { SyncController } from '../../player/SyncController'
 import { PART_COLOR, PART_LABEL, type PartId, type Take } from '../../types'
 
@@ -12,9 +12,9 @@ const COUNT_IN_MS = COUNT_IN_CLICKS * CLICK_INTERVAL_SEC * 1000
 
 /**
  * Post-record review: looped synced playback of (your take + guides) with the
- * ±250 ms nudge slider applied live. Audio comes from stems through one
- * StemMixer (videos stay muted) — mandatory on iOS, where only a single
- * unmuted media element can sound at a time.
+ * ±250 ms nudge slider. Audio is an offline premix of the stems played by one
+ * <audio> element (CollageAudio); nudge moves re-render it, debounced. Videos
+ * stay muted visuals slaved to the audio clock.
  */
 export function SyncCheck({
   result, part, guides, parts, onSave, onRetake, onDiscard, saving,
@@ -32,11 +32,12 @@ export function SyncCheck({
   const [nudge, setNudge] = useState(0)
   const [playing, setPlaying] = useState(false)
   const controller = useMemo(() => new SyncController(), [])
-  const mixer = useMemo(() => new StemMixer(), [])
+  const audio = useMemo(() => new CollageAudio(), [])
   const loadedRef = useRef(false)
   const fallbackIdsRef = useRef<Set<string>>(new Set())
   const userVideoRef = useRef<HTMLVideoElement>(null)
   const guideRefs = useRef<Record<string, HTMLVideoElement | null>>({})
+  const nudgeTimerRef = useRef(0)
   const userUrl = useMemo(() => URL.createObjectURL(result.blob), [result.blob])
 
   // start just after the last click's decay so count-in bleed isn't audible
@@ -44,16 +45,20 @@ export function SyncCheck({
   const loopEndMs = COUNT_IN_MS + Math.min(result.sungDurationMs, 20_000) // review loops first 20 s
 
   useEffect(() => () => URL.revokeObjectURL(userUrl), [userUrl])
-  useEffect(() => () => { controller.destroy(); mixer.destroy() }, [controller, mixer])
+  useEffect(() => () => {
+    clearTimeout(nudgeTimerRef.current)
+    controller.destroy()
+    audio.destroy()
+  }, [controller, audio])
 
   useEffect(() => {
     controller.onTick = (ms) => {
       if (ms > loopEndMs) {
-        mixer.start(loopStartMs)
+        audio.seek(loopStartMs) // element keeps playing across a seek
         controller.seek(loopStartMs)
       }
     }
-  }, [controller, mixer, loopStartMs, loopEndMs])
+  }, [controller, audio, loopStartMs, loopEndMs])
 
   const ensureLoaded = async () => {
     if (loadedRef.current) return
@@ -75,18 +80,17 @@ export function SyncCheck({
         })),
       )),
     ]
-    fallbackIdsRef.current = await mixer.load(inputs)
+    fallbackIdsRef.current = await audio.load(inputs, loopEndMs)
     loadedRef.current = true
   }
 
   const togglePlay = async () => {
     if (playing) {
       controller.pause()
-      mixer.pause()
+      audio.pause()
       setPlaying(false)
       return
     }
-    await ensureRunning()
     await ensureLoaded()
     const userEl = userVideoRef.current!
     userEl.muted = !fallbackIdsRef.current.has('user')
@@ -100,9 +104,8 @@ export function SyncCheck({
       }),
     ]
     controller.setTracks(tracks)
-    // audio first — the mixer's clock (minus output latency) drives the video
-    mixer.start(loopStartMs)
-    controller.setClock(() => mixer.masterMs() - outputLatency() * 1000)
+    await audio.play(loopStartMs)
+    controller.setClock(() => audio.masterMs())
     await controller.play(loopStartMs)
     setPlaying(true)
   }
@@ -111,7 +114,11 @@ export function SyncCheck({
     const clamped = clampNudgeMs(v)
     setNudge(clamped)
     controller.updateNudge('user', clamped)
-    mixer.setNudge('user', clamped)
+    // re-rendering the mix is ~50 ms of DSP — debounce while the slider moves
+    clearTimeout(nudgeTimerRef.current)
+    nudgeTimerRef.current = window.setTimeout(() => {
+      void audio.setNudge('user', clamped)
+    }, 150)
   }
 
   const guideByPart = Object.fromEntries(guides.map((g) => [g.part, g]))

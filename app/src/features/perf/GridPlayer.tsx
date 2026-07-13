@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp, useMediaUrl } from '../../appContext'
 import { OpenSlot, PartTag } from '../../components/ui'
-import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, ensureRunning, outputLatency } from '../../engine/audio'
+import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from '../../engine/audio'
 import { SyncController } from '../../player/SyncController'
-import { StemMixer } from '../../player/StemMixer'
+import { CollageAudio } from '../../player/premix'
 import { PART_COLOR, PART_LABEL, type PartId, type Take } from '../../types'
 
 const COUNT_IN_MS = COUNT_IN_CLICKS * CLICK_INTERVAL_SEC * 1000
@@ -11,10 +11,11 @@ const COUNT_IN_MS = COUNT_IN_CLICKS * CLICK_INTERVAL_SEC * 1000
 const START_MS = Math.max(0, COUNT_IN_MS - 150)
 
 /**
- * The performed collage. Videos are ALWAYS muted visuals slaved to the master
- * clock; every take's audio comes from its stem, mixed in one Web Audio graph
- * (StemMixer) — the only way multiple parts can sound together on iOS Safari.
- * Learning mode (solo / slow-down / loop) rides the same mixer.
+ * The performed collage. All audio is pre-rendered offline into ONE file
+ * played by a single <audio> element (CollageAudio) — deterministic on every
+ * browser, and the only unmuted media element iOS allows. Videos are muted
+ * visuals slaved to that element's clock. Learning mode (solo / slow-down /
+ * loop) re-renders the mix or adjusts the element directly.
  */
 export function GridPlayer({
   parts, takesByPart, durationMs, onOpenSlot, quadrantOverlay, learn = true, cellHeight = 128,
@@ -30,7 +31,7 @@ export function GridPlayer({
 }) {
   const { store } = useApp()
   const controller = useMemo(() => new SyncController(), [])
-  const mixer = useMemo(() => new StemMixer(), [])
+  const audio = useMemo(() => new CollageAudio(), [])
   const refs = useRef<Partial<Record<PartId, HTMLVideoElement | null>>>({})
   const [playing, setPlaying] = useState(false)
   const [solo, setSolo] = useState<PartId | null>(null)
@@ -38,35 +39,35 @@ export function GridPlayer({
   const [loop, setLoop] = useState(false)
   const loopRef = useRef(loop)
   loopRef.current = loop
-  const loadedRef = useRef(false)
   const fallbackIdsRef = useRef<Set<string>>(new Set())
 
-  useEffect(() => () => { controller.destroy(); mixer.destroy() }, [controller, mixer])
+  useEffect(() => () => { controller.destroy(); audio.destroy() }, [controller, audio])
 
   useEffect(() => {
     controller.onTick = (ms) => {
       if (ms >= durationMs + 300) {
         if (loopRef.current) {
-          mixer.start(START_MS)
+          audio.seek(START_MS) // element keeps playing across a seek — no play() needed
           controller.seek(START_MS)
         } else {
           controller.pause()
-          mixer.pause()
+          audio.pause()
           controller.seek(START_MS)
-          mixer.seek(START_MS)
+          audio.seek(START_MS)
           setPlaying(false)
         }
       }
     }
-  }, [controller, mixer, durationMs])
+  }, [controller, audio, durationMs])
 
   const activeTakes = useMemo(
     () => parts.flatMap((p) => (takesByPart[p] ? [[p, takesByPart[p]!] as const] : [])),
     [parts, takesByPart],
   )
 
+  // CollageAudio.load is keyed on take ids + nudges: picking a different
+  // take re-renders the mix instead of silently reusing the old one
   const ensureLoaded = async () => {
-    if (loadedRef.current) return
     const inputs = await Promise.all(
       activeTakes.map(async ([, take]) => ({
         id: take.takeId,
@@ -76,13 +77,12 @@ export function GridPlayer({
         mediaOffsetMs: take.mediaOffsetMs,
       })),
     )
-    fallbackIdsRef.current = await mixer.load(inputs)
-    loadedRef.current = true
+    fallbackIdsRef.current = await audio.load(inputs, durationMs)
   }
 
   const applyVideoAudio = (soloPart: PartId | null) => {
     // videos stay muted; a video is unmuted ONLY as a last-resort fallback
-    // when its take's audio couldn't be decoded into the mixer
+    // when its take's audio couldn't be decoded into the premix
     for (const [p, take] of activeTakes) {
       const el = refs.current[p]
       if (!el) continue
@@ -94,11 +94,10 @@ export function GridPlayer({
   const toggle = async () => {
     if (playing) {
       controller.pause()
-      mixer.pause()
+      audio.pause()
       setPlaying(false)
       return
     }
-    await ensureRunning()
     await ensureLoaded()
     const tracks = activeTakes.flatMap(([p, take]) => {
       const el = refs.current[p]
@@ -108,12 +107,10 @@ export function GridPlayer({
     controller.setTracks(tracks)
     controller.setRate(rate)
     applyVideoAudio(solo)
-    const resume = controller.masterMs > START_MS && controller.masterMs < durationMs
-    const fromMs = resume ? controller.masterMs : START_MS
-    // audio first: the mixer's AudioContext clock is the single master clock,
-    // shifted by output latency so video shows what is currently AUDIBLE
-    mixer.start(fromMs)
-    controller.setClock(() => mixer.masterMs() - outputLatency() * 1000)
+    const pos = audio.masterMs()
+    const fromMs = pos > START_MS && pos < durationMs ? pos : START_MS
+    await audio.play(fromMs)
+    controller.setClock(() => audio.masterMs())
     await controller.play(fromMs)
     setPlaying(true)
   }
@@ -122,14 +119,14 @@ export function GridPlayer({
     const next = solo === p ? null : p
     setSolo(next)
     const take = next ? takesByPart[next] : undefined
-    mixer.setSolo(take ? take.takeId : null)
+    void audio.setSolo(take ? take.takeId : null)
     applyVideoAudio(next)
   }
 
   const onRate = (r: number) => {
     setRate(r)
     controller.setRate(r)
-    mixer.setRate(r)
+    audio.setRate(r)
   }
 
   const anyTake = activeTakes.length > 0
