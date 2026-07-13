@@ -1,4 +1,4 @@
-import { audioContext, outputLatency } from '../engine/audio'
+import { audioContext } from '../engine/audio'
 
 export interface MixerTrackInput {
   id: string
@@ -129,12 +129,16 @@ export class StemMixer {
   }
 
   /**
-   * Schedule playback so master t=0 lands exactly at t0CtxTime (the guide mix
-   * while recording). Boosted: iOS ducks all output while the mic is live,
-   * so the guide fights back a little — the limiter catches the peaks.
+   * Schedule playback so guide master t=0 enters the graph at t0CtxTime —
+   * the SAME graph time as the first click. Both leave the speaker with the
+   * same output latency, so the two cues the singer follows agree in the
+   * air. (Compensating only the guide, as before, made it lead the clicks
+   * by the output latency — singers came out offset from each other.)
+   * Boosted: iOS ducks all output while the mic is live, so the guide
+   * fights back a little — the limiter catches the peaks.
    */
   startAtT0(t0CtxTime: number): void {
-    this.start(0, t0CtxTime - outputLatency())
+    this.start(0, t0CtxTime)
     if (this.master) this.master.gain.value = 1.6
   }
 

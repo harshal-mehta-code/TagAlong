@@ -1,5 +1,5 @@
 import { refineMediaOffsetMs } from './align'
-import { audioContext, scheduleCountIn, setAudioSessionType, COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from './audio'
+import { audioContext, outputLatency, scheduleCountIn, setAudioSessionType, COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from './audio'
 import { computeMediaOffsetMs } from './offsets'
 import { StemCapture } from './stem'
 
@@ -61,11 +61,28 @@ export class TakeRecorder {
   private recStartCtxTime = 0
   private t0CtxTime = 0
   private singStartCtxTime = 0
+  private latencyCompSec = 0
   private mimeType = ''
   private stopped: Promise<Blob> | null = null
   private stemCapture: StemCapture | null = null
 
   constructor(private stream: MediaStream) {}
+
+  /**
+   * Round-trip recording latency: the singer HEARS the clicks/guide late by
+   * the output latency, and their voice reaches the graph late by the input
+   * latency — so everything they record lands (out + in) after the master
+   * grid. Every serious recording app compensates for this; the stem is
+   * trimmed at t0 + this value so sung notes sit ON the grid.
+   */
+  private measureLatencyComp(): number {
+    const out = Math.min(Math.max(outputLatency(), 0), 0.35)
+    const settings = this.stream.getAudioTracks()[0]?.getSettings() as
+      | (MediaTrackSettings & { latency?: number })
+      | undefined
+    const input = Math.min(Math.max(settings?.latency ?? 0, 0), 0.25)
+    return out + input
+  }
 
   /** Starts recording; resolves with the ctx times of master t=0 and sing start. */
   async start(): Promise<{ t0CtxTime: number; singStartCtxTime: number }> {
@@ -101,13 +118,17 @@ export class TakeRecorder {
     // Arm delay so the recorder is definitely rolling before t=0.
     this.t0CtxTime = scheduleCountIn(0.45)
     this.singStartCtxTime = this.t0CtxTime + COUNT_IN_CLICKS * CLICK_INTERVAL_SEC
+    this.latencyCompSec = this.measureLatencyComp()
     return { t0CtxTime: this.t0CtxTime, singStartCtxTime: this.singStartCtxTime }
   }
 
   async stop(): Promise<RecordingResult> {
     const c = audioContext()
     const stopCtxTime = c.currentTime
-    const stemBlob = this.stemCapture ? await this.stemCapture.stop(this.t0CtxTime) : null
+    // Trim at the latency-compensated t0: sung content lands ON the master
+    // grid whether the singer followed the clicks or the guide voices.
+    const anchorCtxTime = this.t0CtxTime + this.latencyCompSec
+    const stemBlob = this.stemCapture ? await this.stemCapture.stop(anchorCtxTime) : null
     this.stemCapture = null
     this.recorder?.stop()
     const blob = await this.stopped!
@@ -116,7 +137,7 @@ export class TakeRecorder {
     // mic signal, so cross-correlating them measures the true offset —
     // this is what keeps lips and takes aligned. Estimate kept where the
     // browser can't decode its own recording (iOS mp4).
-    let mediaOffsetMs = computeMediaOffsetMs(this.recStartCtxTime, this.t0CtxTime)
+    let mediaOffsetMs = computeMediaOffsetMs(this.recStartCtxTime, anchorCtxTime)
     if (stemBlob) {
       try {
         const refined = await refineMediaOffsetMs(blob, stemBlob, mediaOffsetMs)

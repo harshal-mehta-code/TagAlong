@@ -85,6 +85,27 @@ export function resetAudioContext(): void {
 }
 
 /**
+ * Recreate the context at the mic's native rate BEFORE recording begins.
+ * Chrome's live capture resampler glitches audibly ("robotic" takes) when
+ * the context rate doesn't match the input device — common right after a
+ * Bluetooth/device switch. Safe here: nothing is playing yet on the record
+ * screen, unlike the post-capture teardown window (see stop()).
+ */
+export function matchContextSampleRate(rate: number | undefined): void {
+  if (!rate || !Number.isFinite(rate)) return
+  if (ctx && ctx.sampleRate === rate) return
+  const old = ctx
+  ctx = null
+  void old?.close().catch(() => {})
+  applyAudioSessionType()
+  try {
+    ctx = new AudioContext({ sampleRate: rate })
+  } catch {
+    ctx = new AudioContext() // rate not supported — device default beats nothing
+  }
+}
+
+/**
  * Call from (or shortly after) a user gesture before any playback. Resumes
  * the context and, on iOS, makes sure output is on the media channel so the
  * silent switch doesn't mute the app.

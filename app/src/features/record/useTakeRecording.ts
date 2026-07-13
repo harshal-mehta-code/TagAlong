@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { useApp } from '../../appContext'
-import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, audioContext, ensureRunning, hasAudioSessionApi, resetAudioContext, setAudioSessionType } from '../../engine/audio'
+import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, audioContext, ensureRunning, hasAudioSessionApi, matchContextSampleRate, outputLatency, resetAudioContext, setAudioSessionType } from '../../engine/audio'
 import { TakeRecorder, getCameraStream, type RecordingResult } from '../../engine/recorder'
 import { StemMixer } from '../../player/StemMixer'
 import type { Take } from '../../types'
@@ -50,6 +50,9 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls, enabled = 
       streamRef.current?.getTracks().forEach((t) => t.stop())
       const stream = await getCameraStream()
       streamRef.current = stream
+      // capture must run at the mic's native rate — Chrome's live resampler
+      // glitches ("robotic" takes) when the context rate doesn't match
+      matchContextSampleRate(stream.getAudioTracks()[0]?.getSettings().sampleRate)
       setState((s) => ({ ...s, stage: 'ready', stream, error: null }))
     } catch {
       setState((s) => ({
@@ -138,12 +141,15 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls, enabled = 
   const startGuideVideos = useCallback((t0CtxTime: number) => {
     if (!guideEls) return
     const c = audioContext()
+    // videos should show what the singer is HEARING, which leaves the
+    // speaker one output latency after it enters the graph
+    const airT0 = t0CtxTime + outputLatency()
     for (const g of guides) {
       const el = guideEls.current[g.takeId]
       if (!el) continue
       el.muted = true // audio comes from the mixer, never the element
       const offsetSec = (g.mediaOffsetMs + g.nudgeMs) / 1000
-      const leadSec = t0CtxTime - c.currentTime // time until t=0 (~0.45s)
+      const leadSec = airT0 - c.currentTime // time until t=0 airs (~0.45s+latency)
       const startAt = offsetSec - leadSec
       if (startAt >= 0) {
         el.currentTime = startAt
@@ -158,7 +164,7 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls, enabled = 
     // one visual drift check after playback settles
     guideTimersRef.current.push(
       window.setTimeout(() => {
-        const masterSec = c.currentTime - t0CtxTime
+        const masterSec = c.currentTime - airT0
         for (const g of guides) {
           const el = guideEls.current[g.takeId]
           if (!el || el.paused) continue
