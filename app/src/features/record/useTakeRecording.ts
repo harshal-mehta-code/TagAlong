@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { useApp } from '../../appContext'
-import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, audioContext, ensureRunning, resetAudioContext } from '../../engine/audio'
+import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, audioContext, ensureRunning, resetAudioContext, setAudioSessionType } from '../../engine/audio'
 import { TakeRecorder, getCameraStream, type RecordingResult } from '../../engine/recorder'
 import { StemMixer } from '../../player/StemMixer'
 import type { Take } from '../../types'
@@ -62,6 +62,7 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls, enabled = 
   const releaseCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
+    setAudioSessionType('playback') // mic gone — back to the media channel
   }, [])
 
   const stopGuides = useCallback(() => {
@@ -177,6 +178,11 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls, enabled = 
     startGuideVideos(t0CtxTime)
     setState((s) => ({ ...s, stage: 'countin', countdown: COUNT_IN_CLICKS }))
 
+    // Re-render ONLY when a displayed value changes (countdown digit, elapsed
+    // second) — a 60 fps setState here made React churn the main thread while
+    // guide videos decode, which showed up as choppy recording sessions.
+    let lastCount = -1
+    let lastSec = -1
     const tick = () => {
       const c = audioContext()
       const times = timesRef.current!
@@ -185,11 +191,18 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls, enabled = 
       if (now < times.singStart) {
         const idx = Math.max(0, Math.floor((now - times.t0) / CLICK_INTERVAL_SEC))
         const remaining = now < times.t0 ? COUNT_IN_CLICKS : COUNT_IN_CLICKS - idx
-        setState((s) => ({ ...s, stage: 'countin', countdown: remaining, masterMs }))
+        if (remaining !== lastCount) {
+          lastCount = remaining
+          setState((s) => ({ ...s, stage: 'countin', countdown: remaining, masterMs }))
+        }
       } else {
         const elapsedMs = (now - times.singStart) * 1000
         if (elapsedMs >= MAX_SING_MS) { void stop(); return }
-        setState((s) => ({ ...s, stage: 'recording', countdown: null, elapsedMs, masterMs }))
+        const sec = Math.floor(elapsedMs / 1000)
+        if (sec !== lastSec) {
+          lastSec = sec
+          setState((s) => ({ ...s, stage: 'recording', countdown: null, elapsedMs, masterMs }))
+        }
       }
       rafRef.current = requestAnimationFrame(tick)
     }

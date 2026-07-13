@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp, useMediaUrl } from '../../appContext'
 import { OpenSlot, PartTag } from '../../components/ui'
-import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, ensureRunning } from '../../engine/audio'
+import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, ensureRunning, outputLatency } from '../../engine/audio'
 import { SyncController } from '../../player/SyncController'
 import { StemMixer } from '../../player/StemMixer'
 import { PART_COLOR, PART_LABEL, type PartId, type Take } from '../../types'
@@ -47,8 +47,8 @@ export function GridPlayer({
     controller.onTick = (ms) => {
       if (ms >= durationMs + 300) {
         if (loopRef.current) {
-          controller.seek(START_MS)
           mixer.start(START_MS)
+          controller.seek(START_MS)
         } else {
           controller.pause()
           mixer.pause()
@@ -110,8 +110,11 @@ export function GridPlayer({
     applyVideoAudio(solo)
     const resume = controller.masterMs > START_MS && controller.masterMs < durationMs
     const fromMs = resume ? controller.masterMs : START_MS
-    await controller.play(fromMs)
+    // audio first: the mixer's AudioContext clock is the single master clock,
+    // shifted by output latency so video shows what is currently AUDIBLE
     mixer.start(fromMs)
+    controller.setClock(() => mixer.masterMs() - outputLatency() * 1000)
+    await controller.play(fromMs)
     setPlaying(true)
   }
 

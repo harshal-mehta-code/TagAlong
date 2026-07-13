@@ -12,6 +12,11 @@ export interface SyncTrack {
  * slaved to a master clock at (mediaOffset + nudge + masterTime). Drift is
  * corrected with playbackRate micro-adjustments, hard re-seek past 60 ms
  * (doc 04 "performed collage").
+ *
+ * The master clock is EXTERNAL when audio is playing (setClock → the stem
+ * mixer's AudioContext clock, output-latency compensated). Video and audio
+ * slaved to two unrelated clocks was the root of the A/V desync — video
+ * must follow the clock the audience actually hears.
  */
 export class SyncController {
   private tracks: SyncTrack[] = []
@@ -21,10 +26,16 @@ export class SyncController {
   private masterBaseMs = 0
   private _playing = false
   private rate = 1
+  private clock: (() => number) | null = null
   onTick: ((masterMs: number) => void) | null = null
 
   setTracks(tracks: SyncTrack[]): void {
     this.tracks = tracks
+  }
+
+  /** Slave this controller to an external master clock in ms (null = internal wall clock). */
+  setClock(fn: (() => number) | null): void {
+    this.clock = fn
   }
 
   get playing(): boolean {
@@ -33,6 +44,7 @@ export class SyncController {
 
   get masterMs(): number {
     if (!this._playing) return this.masterBaseMs
+    if (this.clock) return this.clock()
     return this.masterBaseMs + (performance.now() - this.masterStartPerf) * this.rate
   }
 
@@ -47,6 +59,14 @@ export class SyncController {
         try { await t.el.play() } catch { /* autoplay policies; user will tap again */ }
       }),
     )
+    // el.play() resolves late and unevenly; realign once now that frames are
+    // actually flowing so takes don't start visibly offset
+    for (const t of this.tracks) {
+      const expected = mediaTimeForMasterMs(this.masterMs, t.mediaOffsetMs, t.nudgeMs)
+      if (Math.abs(t.el.currentTime - expected) > 0.05) t.el.currentTime = expected
+    }
+    this.lastCheck = performance.now() // give decoders a beat before drift checks
+    this.overLimit = {}
     this.loop()
   }
 

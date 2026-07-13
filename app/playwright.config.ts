@@ -1,4 +1,8 @@
+import { existsSync } from 'node:fs'
 import { defineConfig } from '@playwright/test'
+
+// sandbox environments pre-install chromium here; elsewhere let Playwright resolve it
+const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium'
 
 export default defineConfig({
   testDir: './e2e',
@@ -8,7 +12,8 @@ export default defineConfig({
     baseURL: 'http://localhost:4173',
     permissions: ['camera', 'microphone'],
     launchOptions: {
-      executablePath: process.env.CI ? undefined : '/opt/pw-browsers/chromium',
+      executablePath:
+        !process.env.CI && existsSync(SANDBOX_CHROMIUM) ? SANDBOX_CHROMIUM : undefined,
       args: [
         '--use-fake-device-for-media-stream',
         '--use-fake-ui-for-media-stream',

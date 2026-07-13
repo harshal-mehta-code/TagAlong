@@ -1,4 +1,4 @@
-import { audioContext, scheduleCountIn, COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from './audio'
+import { audioContext, scheduleCountIn, setAudioSessionType, COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from './audio'
 import { computeMediaOffsetMs } from './offsets'
 import { StemCapture } from './stem'
 
@@ -27,6 +27,9 @@ function pickMimeType(): string {
 }
 
 export async function getCameraStream(): Promise<MediaStream> {
+  // while capturing, ask iOS for the play-and-record session explicitly —
+  // guide audio must stay audible (and on the speaker) alongside the mic
+  setAudioSessionType('play-and-record')
   return navigator.mediaDevices.getUserMedia({
     video: { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 960 } },
     audio: {
@@ -90,8 +93,9 @@ export class TakeRecorder {
 
     // PCM stem capture rides the same AudioContext clock as the count-in,
     // giving the collage a sample-accurate, decode-anywhere audio source.
+    // Awaited so the worklet is live before t=0 is scheduled below.
     this.stemCapture = new StemCapture(this.stream)
-    this.stemCapture.start()
+    await this.stemCapture.start()
 
     // Arm delay so the recorder is definitely rolling before t=0.
     this.t0CtxTime = scheduleCountIn(0.45)
@@ -102,7 +106,7 @@ export class TakeRecorder {
   async stop(): Promise<RecordingResult> {
     const c = audioContext()
     const stopCtxTime = c.currentTime
-    const stemBlob = this.stemCapture?.stop(this.t0CtxTime) ?? null
+    const stemBlob = this.stemCapture ? await this.stemCapture.stop(this.t0CtxTime) : null
     this.stemCapture = null
     this.recorder?.stop()
     const blob = await this.stopped!

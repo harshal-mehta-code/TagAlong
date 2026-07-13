@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp, useMediaUrl } from '../../appContext'
 import { Button, Grid, PartTag } from '../../components/ui'
-import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, ensureRunning } from '../../engine/audio'
+import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, ensureRunning, outputLatency } from '../../engine/audio'
 import { clampNudgeMs } from '../../engine/offsets'
 import type { RecordingResult } from '../../engine/recorder'
 import { StemMixer } from '../../player/StemMixer'
@@ -49,8 +49,8 @@ export function SyncCheck({
   useEffect(() => {
     controller.onTick = (ms) => {
       if (ms > loopEndMs) {
-        controller.seek(loopStartMs)
         mixer.start(loopStartMs)
+        controller.seek(loopStartMs)
       }
     }
   }, [controller, mixer, loopStartMs, loopEndMs])
@@ -100,8 +100,10 @@ export function SyncCheck({
       }),
     ]
     controller.setTracks(tracks)
-    await controller.play(loopStartMs)
+    // audio first — the mixer's clock (minus output latency) drives the video
     mixer.start(loopStartMs)
+    controller.setClock(() => mixer.masterMs() - outputLatency() * 1000)
+    await controller.play(loopStartMs)
     setPlaying(true)
   }
 

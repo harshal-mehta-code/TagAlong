@@ -2,9 +2,68 @@ import { KEYS, type Key } from '../types'
 
 let ctx: AudioContext | null = null
 
+// --- iOS audio session -----------------------------------------------------
+//
+// iOS plays Web Audio on the RINGER channel by default, so the mute switch
+// silences the entire app (pitch pipe, count-in, collage audio) on the
+// speaker while headphones still work. The Audio Session API (WebKit,
+// iOS/Safari 16.4+) is the official fix: type 'playback' moves output to the
+// media channel. While the mic is live we ask for 'play-and-record' instead.
+
+type SessionKind = 'playback' | 'play-and-record'
+interface AudioSessionLike { type: string }
+
+function audioSession(): AudioSessionLike | null {
+  const s = (navigator as Navigator & { audioSession?: AudioSessionLike }).audioSession
+  return s ?? null
+}
+
+// the kind the app currently wants; re-asserted (never overridden) by
+// ensureRunning/audioContext so a pitch-pipe tap while the mic is live
+// can't yank the session out of play-and-record
+let sessionKind: SessionKind = 'playback'
+
+export function setAudioSessionType(kind: SessionKind): void {
+  sessionKind = kind
+  applyAudioSessionType()
+}
+
+function applyAudioSessionType(): void {
+  const s = audioSession()
+  if (s) {
+    try { s.type = sessionKind } catch { /* older enum set */ }
+  }
+}
+
+const IS_IOS_LIKE =
+  typeof navigator !== 'undefined' &&
+  (/iP(hone|ad|od)/.test(navigator.userAgent) ||
+    (navigator.userAgent.includes('Mac') && navigator.maxTouchPoints > 1))
+
+// 50 ms of silent 16-bit PCM. On iOS versions without navigator.audioSession,
+// playing any <audio> element kicks the WebKit session onto the media
+// channel, unmuting Web Audio under the silent switch (the classic
+// "unmute-ios-audio" trick). Harmless elsewhere; only used as fallback.
+const SILENT_WAV =
+  'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSAD' +
+  'A'.repeat(1070) + '=='
+let unlockEl: HTMLAudioElement | null = null
+
+function unlockIosMediaChannel(): void {
+  if (!IS_IOS_LIKE || audioSession()) return
+  if (!unlockEl) {
+    unlockEl = new Audio(SILENT_WAV)
+    unlockEl.preload = 'auto'
+  }
+  void unlockEl.play().catch(() => {})
+}
+
 /** One shared AudioContext; must be (re)started from a user gesture on iOS. */
 export function audioContext(): AudioContext {
-  if (!ctx) ctx = new AudioContext()
+  if (!ctx) {
+    applyAudioSessionType()
+    ctx = new AudioContext()
+  }
   return ctx
 }
 
@@ -20,8 +79,15 @@ export function resetAudioContext(): void {
   void old?.close().catch(() => {})
 }
 
+/**
+ * Call from (or shortly after) a user gesture before any playback. Resumes
+ * the context and, on iOS, makes sure output is on the media channel so the
+ * silent switch doesn't mute the app.
+ */
 export async function ensureRunning(): Promise<AudioContext> {
   const c = audioContext()
+  applyAudioSessionType()
+  unlockIosMediaChannel()
   if (c.state !== 'running') await c.resume()
   return c
 }

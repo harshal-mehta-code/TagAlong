@@ -11,20 +11,73 @@ import { audioContext } from './audio'
  * WAV because Web Audio decodes it everywhere; container-decode of mp4 video
  * blobs is exactly what iOS rejects.
  */
+interface WorkletMsg {
+  kind: 'start' | 'chunk' | 'flushed'
+  ctxTime?: number
+  samples?: Float32Array
+}
+
+// contexts whose worklet module is already loaded (it survives per context)
+const workletLoaded = new WeakSet<AudioContext>()
+
+async function loadCaptureWorklet(c: AudioContext): Promise<boolean> {
+  if (!c.audioWorklet) return false
+  if (workletLoaded.has(c)) return true
+  try {
+    await c.audioWorklet.addModule(`${import.meta.env.BASE_URL}stem-worklet.js`)
+    workletLoaded.add(c)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export class StemCapture {
   private chunks: Float32Array[] = []
   private firstChunkCtxTime: number | null = null
-  private node: ScriptProcessorNode | null = null
+  private worklet: AudioWorkletNode | null = null
+  private script: ScriptProcessorNode | null = null
   private source: MediaStreamAudioSourceNode | null = null
   private silent: GainNode | null = null
+  private flushResolve: (() => void) | null = null
 
   constructor(private stream: MediaStream) {}
 
-  start(): void {
+  async start(): Promise<void> {
     const c = audioContext()
     this.source = c.createMediaStreamSource(this.stream)
-    this.node = c.createScriptProcessor(4096, 1, 1)
-    this.node.onaudioprocess = (e) => {
+    // a zero-gain sink keeps the capture node pulled without audible feedback
+    this.silent = c.createGain()
+    this.silent.gain.value = 0
+    this.silent.connect(c.destination)
+
+    if (await loadCaptureWorklet(c)) {
+      // capture runs on the audio thread — main-thread jank (React renders,
+      // video decode) can no longer drop mic buffers the way ScriptProcessor did
+      this.worklet = new AudioWorkletNode(c, 'stem-capture', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        channelCount: 1,
+        channelCountMode: 'explicit',
+      })
+      this.worklet.port.onmessage = (e: MessageEvent<WorkletMsg>) => {
+        const m = e.data
+        if (m.kind === 'start' && this.firstChunkCtxTime === null) {
+          this.firstChunkCtxTime = m.ctxTime ?? null
+        } else if (m.kind === 'chunk' && m.samples) {
+          this.chunks.push(m.samples)
+        } else if (m.kind === 'flushed') {
+          this.flushResolve?.()
+        }
+      }
+      this.source.connect(this.worklet)
+      this.worklet.connect(this.silent)
+      return
+    }
+
+    // last-resort fallback: deprecated main-thread capture
+    this.script = c.createScriptProcessor(4096, 1, 1)
+    this.script.onaudioprocess = (e) => {
       if (this.firstChunkCtxTime === null) {
         const pt = (e as AudioProcessingEvent & { playbackTime?: number }).playbackTime
         this.firstChunkCtxTime = typeof pt === 'number' && pt > 0
@@ -33,20 +86,30 @@ export class StemCapture {
       }
       this.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)))
     }
-    // a zero-gain sink keeps the processor pulling without audible feedback
-    this.silent = c.createGain()
-    this.silent.gain.value = 0
-    this.source.connect(this.node)
-    this.node.connect(this.silent)
-    this.silent.connect(c.destination)
+    this.source.connect(this.script)
+    this.script.connect(this.silent)
   }
 
   /** Stops capture and returns the WAV stem trimmed to start at t0 (or null if nothing captured). */
-  stop(t0CtxTime: number): Blob | null {
+  async stop(t0CtxTime: number): Promise<Blob | null> {
+    if (this.worklet) {
+      // ask the audio thread for its buffered tail; don't hang if it's gone
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 250)
+        this.flushResolve = () => {
+          clearTimeout(timer)
+          resolve()
+        }
+        this.worklet!.port.postMessage('flush')
+      })
+      this.flushResolve = null
+    }
     this.source?.disconnect()
-    this.node?.disconnect()
+    this.worklet?.disconnect()
+    this.script?.disconnect()
     this.silent?.disconnect()
-    this.node = null
+    this.worklet = null
+    this.script = null
     if (this.chunks.length === 0 || this.firstChunkCtxTime === null) return null
     const sr = audioContext().sampleRate
     return trimAndEncode(this.chunks, this.firstChunkCtxTime, t0CtxTime, sr)
