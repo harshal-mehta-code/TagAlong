@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useApp } from '../../appContext'
 import { Button, Screen } from '../../components/ui'
 import { ensureRunning, playPitch } from '../../engine/audio'
-import { performanceFromCombo } from '../../store/localStore'
+import { performanceFromCombo, withTimeout } from '../../store/localStore'
 import { newId } from '../../store/perfId'
 import { PART_COLOR, PART_LABEL, type PartId, type Tag, type Take } from '../../types'
 import { RecordPanel } from './RecordPanel'
@@ -58,12 +58,16 @@ export default function JoinFlow() {
   const rec = useTakeRecording(guides, guideEls, step === 'record')
   const parts = useMemo(() => tag?.parts ?? [], [tag])
 
+  // stable across save retries: if a timed-out save actually landed in the
+  // background, retrying overwrites the same row instead of duplicating it
+  const pendingTakeIdRef = useRef<string | null>(null)
+
   const save = async (nudgeMs: number) => {
     if (!profile || !tag || !part || !rec.state.result || saving) return
     setSaving(true)
     const result = rec.state.result
     const take: Take = {
-      takeId: newId('take'),
+      takeId: (pendingTakeIdRef.current ??= newId('take')),
       tagId: tag.tagId,
       uid: profile.uid,
       displayName: profile.displayName,
@@ -74,14 +78,23 @@ export default function JoinFlow() {
       guideTakeIds: guides.map((g) => g.takeId),
       createdAt: Date.now(),
     }
-    await store.addTake(take, result.blob, result.stemBlob ?? undefined)
-    const perf = await performanceFromCombo(tag, take, guides)
-    if (perf) {
-      await store.createPerformance(perf)
-      setCompletedPerfId(perf.perfId)
-      setStep('celebrate')
-    } else {
-      nav(`/t/${tag.tagId}`, { replace: true })
+    try {
+      await withTimeout(
+        store.addTake(take, result.blob, result.stemBlob ?? undefined), 20_000, 'Saving the take',
+      )
+      const perf = await performanceFromCombo(tag, take, guides)
+      pendingTakeIdRef.current = null
+      if (perf) {
+        await store.createPerformance(perf)
+        setCompletedPerfId(perf.perfId)
+        setStep('celebrate')
+      } else {
+        nav(`/t/${tag.tagId}`, { replace: true })
+      }
+    } catch (err) {
+      window.alert(`Couldn't save your take: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setSaving(false)
     }
   }
 

@@ -18,6 +18,11 @@ function audioSession(): AudioSessionLike | null {
   return s ?? null
 }
 
+/** True where the Audio Session API exists (WebKit 16.4+). */
+export function hasAudioSessionApi(): boolean {
+  return audioSession() !== null
+}
+
 // the kind the app currently wants; re-asserted (never overridden) by
 // ensureRunning/audioContext so a pitch-pipe tap while the mic is live
 // can't yank the session out of play-and-record

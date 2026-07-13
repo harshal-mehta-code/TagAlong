@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useApp } from '../../appContext'
 import { Button, PartChip, Screen } from '../../components/ui'
 import { ensureRunning, playPitch, COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from '../../engine/audio'
+import { withTimeout } from '../../store/localStore'
 import { newId } from '../../store/perfId'
 import { KEYS, PART_ORDER, type Key, type PartId, type Tag, type Take, type Voicing } from '../../types'
 import { RecordPanel } from './RecordPanel'
@@ -23,12 +24,17 @@ export default function StartTagFlow() {
   const guideEls = useRef<Record<string, HTMLVideoElement | null>>({})
   const rec = useTakeRecording([], guideEls, step === 'record')
 
+  // stable across save retries: if a timed-out save actually landed in the
+  // background, retrying overwrites the same rows instead of duplicating them
+  const pendingIdsRef = useRef<{ tagId: string; takeId: string } | null>(null)
+
   const save = async (nudgeMs: number) => {
     if (!profile || !rec.state.result || saving) return
     setSaving(true)
     const result = rec.state.result
+    const ids = (pendingIdsRef.current ??= { tagId: newId('tag'), takeId: newId('take') })
     const tag: Tag = {
-      tagId: newId('tag'),
+      tagId: ids.tagId,
       title: title.trim() || 'Untitled tag',
       creatorUid: profile.uid,
       voicing,
@@ -38,7 +44,7 @@ export default function StartTagFlow() {
       createdAt: Date.now(),
     }
     const take: Take = {
-      takeId: newId('take'),
+      takeId: ids.takeId,
       tagId: tag.tagId,
       uid: profile.uid,
       displayName: profile.displayName,
@@ -49,9 +55,18 @@ export default function StartTagFlow() {
       guideTakeIds: [],
       createdAt: Date.now(),
     }
-    await store.createTag(tag)
-    await store.addTake(take, result.blob, result.stemBlob ?? undefined)
-    nav(`/t/${tag.tagId}`, { replace: true })
+    try {
+      await store.createTag(tag)
+      await withTimeout(
+        store.addTake(take, result.blob, result.stemBlob ?? undefined), 20_000, 'Saving the take',
+      )
+      pendingIdsRef.current = null
+      nav(`/t/${tag.tagId}`, { replace: true })
+    } catch (err) {
+      window.alert(`Couldn't save your take: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (

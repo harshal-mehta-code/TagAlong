@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { useApp } from '../../appContext'
-import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, audioContext, ensureRunning, resetAudioContext, setAudioSessionType } from '../../engine/audio'
+import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC, audioContext, ensureRunning, hasAudioSessionApi, resetAudioContext, setAudioSessionType } from '../../engine/audio'
 import { TakeRecorder, getCameraStream, type RecordingResult } from '../../engine/recorder'
 import { StemMixer } from '../../player/StemMixer'
 import type { Take } from '../../types'
@@ -124,10 +124,14 @@ export function useTakeRecording(guides: Take[], guideEls?: GuideEls, enabled = 
     stopGuides()
     const result = await recorderRef.current.stop()
     recorderRef.current = null
-    // free the camera so review playback isn't competing with a live capture,
-    // and rebuild the audio context to escape iOS's ducked mic session
+    // Free the camera so review playback isn't competing with a live capture.
+    // Where the Audio Session API exists, restoring type='playback' (in
+    // releaseCamera) exits the ducked record session IN PLACE — recreating
+    // the context here raced iOS's route teardown, and a fresh context could
+    // adopt the dying mono "phone-mode" route (left-ear-only or dead audio).
+    // Only legacy browsers without the API still need the reset hack.
     releaseCamera()
-    resetAudioContext()
+    if (!hasAudioSessionApi()) resetAudioContext()
     setState((s) => ({ ...s, stage: 'done', result, countdown: null, stream: null }))
   }, [stopGuides, releaseCamera])
 

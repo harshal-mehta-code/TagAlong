@@ -78,6 +78,25 @@ describe('LocalStore', () => {
     expect(await store.getMedia('t1')).toBeDefined()
   })
 
+  it('round-trips media and stem bytes with their mime types (buffer rows)', async () => {
+    const stem = new Blob(['wavdata'], { type: 'audio/wav' })
+    await store.addTake(makeTake('lead', 't1'), blob(), stem)
+    const media = await store.getMedia('t1')
+    expect(media?.type).toBe('video/webm')
+    expect(await media!.text()).toBe('x')
+    const gotStem = await store.getStem('t1')
+    expect(gotStem?.type).toBe('audio/wav')
+    expect(await gotStem!.text()).toBe('wavdata')
+  })
+
+  it('re-saving the same takeId overwrites instead of duplicating (retry after timeout)', async () => {
+    await store.addTake(makeTake('lead', 't1'), blob())
+    await store.addTake(makeTake('lead', 't1'), new Blob(['y'], { type: 'video/mp4' }))
+    const takes = await store.listTakes('tag1')
+    expect(takes).toHaveLength(1)
+    expect(await (await store.getMedia('t1'))!.text()).toBe('y')
+  })
+
   it('duplicate performance creation is a silent no-op', async () => {
     const perf: Performance = {
       perfId: 'p1', tagId: 'tag1', takeIds: { lead: 't1' },

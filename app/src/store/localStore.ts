@@ -37,6 +37,39 @@ function stemKey(takeId: string): string {
   return `${takeId}:stem`
 }
 
+/**
+ * Media rows store raw bytes + mime type, not Blobs: Safari sometimes fails
+ * or hangs when persisting Blobs to IndexedDB (the "Saving…" that never
+ * finishes). Older rows may still hold a Blob — read both shapes.
+ */
+interface MediaRow {
+  takeId: string
+  blob?: Blob
+  buf?: ArrayBuffer
+  type?: string
+}
+
+function rowToBlob(row: MediaRow | undefined): Blob | undefined {
+  if (!row) return undefined
+  if (row.blob) return row.blob
+  if (row.buf) return new Blob([row.buf], { type: row.type ?? '' })
+  return undefined
+}
+
+/** Rejects if an operation outlives ms — the UI must never sit stuck on a hung IndexedDB call. */
+export function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${what} timed out after ${Math.round(ms / 1000)}s — please try again`)),
+      ms,
+    )
+    p.then(
+      (v) => { clearTimeout(timer); resolve(v) },
+      (e) => { clearTimeout(timer); reject(e) },
+    )
+  })
+}
+
 function open(): Promise<IDBPDatabase> {
   return openDB(DB_NAME, 1, {
     upgrade(db) {
@@ -86,11 +119,17 @@ export class LocalStore implements DataStore {
   }
 
   async addTake(take: Take, media: Blob, stem?: Blob): Promise<void> {
+    // Convert BEFORE opening the transaction: awaiting non-IDB work inside
+    // one lets Safari auto-close it mid-flight.
+    const mediaBuf = await media.arrayBuffer()
+    const stemBuf = stem ? await stem.arrayBuffer() : undefined
     const db = await this.dbp
     const tx = db.transaction(['takes', 'media'], 'readwrite')
-    await tx.objectStore('takes').put(take)
-    await tx.objectStore('media').put({ takeId: take.takeId, blob: media })
-    if (stem) await tx.objectStore('media').put({ takeId: stemKey(take.takeId), blob: stem })
+    void tx.objectStore('takes').put(take)
+    void tx.objectStore('media').put({ takeId: take.takeId, buf: mediaBuf, type: media.type })
+    if (stemBuf) {
+      void tx.objectStore('media').put({ takeId: stemKey(take.takeId), buf: stemBuf, type: stem!.type })
+    }
     await tx.done
   }
 
@@ -143,14 +182,12 @@ export class LocalStore implements DataStore {
 
   async getMedia(takeId: string): Promise<Blob | undefined> {
     const db = await this.dbp
-    const row = await db.get('media', takeId)
-    return row?.blob
+    return rowToBlob(await db.get('media', takeId))
   }
 
   async getStem(takeId: string): Promise<Blob | undefined> {
     const db = await this.dbp
-    const row = await db.get('media', stemKey(takeId))
-    return row?.blob
+    return rowToBlob(await db.get('media', stemKey(takeId)))
   }
 
   async createPerformance(perf: Performance): Promise<void> {
