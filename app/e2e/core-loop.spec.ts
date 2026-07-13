@@ -75,14 +75,16 @@ test('core loop: start, tag along ×3, performance completes and plays', async (
   await expect(page.getByTestId('grid-play')).toBeVisible()
   await page.getByTestId('grid-play').click()
   await page.waitForTimeout(2_500)
-  // all four quadrant videos should be progressing
-  const times = await page.$$eval('video', (els) =>
+  // all four quadrant videos should be progressing (the live path runs here:
+  // Playwright's Chromium can't encode AAC, so no mp4 pre-render exists)
+  const cellVideo = 'video:not([data-testid="grid-render-video"])'
+  const times = await page.$$eval(cellVideo, (els) =>
     els.map((v) => (v as HTMLVideoElement).currentTime),
   )
   expect(times.filter((t) => t > 0).length).toBeGreaterThanOrEqual(4)
-  // audio comes from the stem mixer — every video must stay muted (the iOS
-  // one-unmuted-element rule means element audio can never mix a quartet)
-  const muted = await page.$$eval('video', (els) =>
+  // audio comes from the premix — every per-take video must stay muted (the
+  // iOS one-unmuted-element rule means element audio can never mix a quartet)
+  const muted = await page.$$eval(cellVideo, (els) =>
     els.map((v) => (v as HTMLVideoElement).muted),
   )
   expect(muted.every(Boolean)).toBe(true)

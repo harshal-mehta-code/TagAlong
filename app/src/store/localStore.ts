@@ -28,6 +28,9 @@ export interface DataStore {
   listPerformances(tagId?: string): Promise<Performance[]>
   getPerformance(perfId: string): Promise<Performance | undefined>
   toggleLike(perfId: string, uid: string): Promise<Performance | undefined>
+  /** Cached single-mp4 render of a take set; `key` fingerprints takes+nudges so stale renders miss. */
+  getRender(setKey: string): Promise<{ key: string; blob: Blob } | undefined>
+  putRender(setKey: string, key: string, takeIds: string[], blob: Blob): Promise<void>
 }
 
 const DB_NAME = 'tagalong-v1'
@@ -70,17 +73,38 @@ export function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise
   })
 }
 
+/** Cached collage renders (bytes, not Blobs — same Safari IDB hazard as media). */
+interface RenderRow {
+  setKey: string
+  key: string
+  takeIds: string[]
+  buf: ArrayBuffer
+  type: string
+  updatedAt: number
+  /** breaks updatedAt ties (several puts can land in one ms) */
+  seq: number
+}
+
+/** Renders kept before the oldest are pruned (each is a few MB of mp4). */
+const MAX_RENDER_ROWS = 8
+let renderSeq = 0
+
 function open(): Promise<IDBPDatabase> {
-  return openDB(DB_NAME, 1, {
-    upgrade(db) {
-      db.createObjectStore('profile', { keyPath: 'uid' })
-      db.createObjectStore('tags', { keyPath: 'tagId' })
-      const takes = db.createObjectStore('takes', { keyPath: 'takeId' })
-      takes.createIndex('byTag', 'tagId')
-      db.createObjectStore('media', { keyPath: 'takeId' })
-      const perfs = db.createObjectStore('performances', { keyPath: 'perfId' })
-      perfs.createIndex('byTag', 'tagId')
-      db.createObjectStore('likes', { keyPath: 'id' })
+  return openDB(DB_NAME, 2, {
+    upgrade(db, oldVersion) {
+      if (oldVersion < 1) {
+        db.createObjectStore('profile', { keyPath: 'uid' })
+        db.createObjectStore('tags', { keyPath: 'tagId' })
+        const takes = db.createObjectStore('takes', { keyPath: 'takeId' })
+        takes.createIndex('byTag', 'tagId')
+        db.createObjectStore('media', { keyPath: 'takeId' })
+        const perfs = db.createObjectStore('performances', { keyPath: 'perfId' })
+        perfs.createIndex('byTag', 'tagId')
+        db.createObjectStore('likes', { keyPath: 'id' })
+      }
+      if (oldVersion < 2) {
+        db.createObjectStore('renders', { keyPath: 'setKey' })
+      }
     },
   })
 }
@@ -152,6 +176,7 @@ export class LocalStore implements DataStore {
       }
     }
     await tx.done
+    await this.dropRendersWith([takeId])
   }
 
   async deleteTag(tagId: string): Promise<void> {
@@ -167,6 +192,7 @@ export class LocalStore implements DataStore {
     }
     for (const p of perfs) await tx.objectStore('performances').delete(p.perfId)
     await tx.done
+    await this.dropRendersWith(takes.map((t) => t.takeId))
   }
 
   async listTakes(tagId: string): Promise<Take[]> {
@@ -210,6 +236,41 @@ export class LocalStore implements DataStore {
   async getPerformance(perfId: string): Promise<Performance | undefined> {
     const db = await this.dbp
     return db.get('performances', perfId)
+  }
+
+  async getRender(setKey: string): Promise<{ key: string; blob: Blob } | undefined> {
+    const db = await this.dbp
+    const row = (await db.get('renders', setKey)) as RenderRow | undefined
+    if (!row) return undefined
+    return { key: row.key, blob: new Blob([row.buf], { type: row.type }) }
+  }
+
+  async putRender(setKey: string, key: string, takeIds: string[], blob: Blob): Promise<void> {
+    const buf = await blob.arrayBuffer() // convert before the tx (Safari)
+    const db = await this.dbp
+    const tx = db.transaction('renders', 'readwrite')
+    void tx.store.put({
+      setKey, key, takeIds, buf, type: blob.type, updatedAt: Date.now(), seq: renderSeq++,
+    } satisfies RenderRow)
+    const rows = (await tx.store.getAll()) as RenderRow[]
+    if (rows.length > MAX_RENDER_ROWS) {
+      rows.sort((a, b) => a.updatedAt - b.updatedAt || (a.seq ?? 0) - (b.seq ?? 0))
+      for (const stale of rows.slice(0, rows.length - MAX_RENDER_ROWS)) {
+        void tx.store.delete(stale.setKey)
+      }
+    }
+    await tx.done
+  }
+
+  /** Drop cached renders that contain any of the given takes. */
+  private async dropRendersWith(takeIds: string[]): Promise<void> {
+    const db = await this.dbp
+    const tx = db.transaction('renders', 'readwrite')
+    const rows = (await tx.store.getAll()) as RenderRow[]
+    for (const row of rows) {
+      if (row.takeIds.some((id) => takeIds.includes(id))) void tx.store.delete(row.setKey)
+    }
+    await tx.done
   }
 
   async toggleLike(perfId: string, uid: string): Promise<Performance | undefined> {

@@ -97,6 +97,35 @@ describe('LocalStore', () => {
     expect(await (await store.getMedia('t1'))!.text()).toBe('y')
   })
 
+  it('round-trips cached renders and misses on a stale key', async () => {
+    const mp4 = new Blob(['fakemp4'], { type: 'video/mp4' })
+    await store.putRender('t1|t2', 'v1|t1@450|t2@430|20000', ['t1', 't2'], mp4)
+    const hit = await store.getRender('t1|t2')
+    expect(hit?.key).toBe('v1|t1@450|t2@430|20000')
+    expect(await hit!.blob.text()).toBe('fakemp4')
+    expect(hit!.blob.type).toBe('video/mp4')
+    expect(await store.getRender('t1|t3')).toBeUndefined()
+  })
+
+  it('deleting a take drops cached renders containing it', async () => {
+    await store.createTag(makeTag())
+    await store.addTake(makeTake('lead', 't1'), blob())
+    await store.putRender('t1|t2', 'k', ['t1', 't2'], new Blob(['m'], { type: 'video/mp4' }))
+    await store.putRender('t3|t4', 'k2', ['t3', 't4'], new Blob(['m'], { type: 'video/mp4' }))
+    await store.deleteTake('t1')
+    expect(await store.getRender('t1|t2')).toBeUndefined()
+    expect(await store.getRender('t3|t4')).toBeDefined()
+  })
+
+  it('prunes the oldest renders beyond the cap', async () => {
+    for (let i = 0; i < 10; i++) {
+      await store.putRender(`set${i}`, `k${i}`, [`t${i}`], new Blob(['m'], { type: 'video/mp4' }))
+    }
+    expect(await store.getRender('set0')).toBeUndefined()
+    expect(await store.getRender('set1')).toBeUndefined()
+    expect(await store.getRender('set9')).toBeDefined()
+  })
+
   it('duplicate performance creation is a silent no-op', async () => {
     const perf: Performance = {
       perfId: 'p1', tagId: 'tag1', takeIds: { lead: 't1' },

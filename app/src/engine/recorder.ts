@@ -1,7 +1,7 @@
-import { refineMediaOffsetMs } from './align'
+import { measureRoundTripSec, refineMediaOffsetMs } from './align'
 import { audioContext, outputLatency, scheduleCountIn, setAudioSessionType, COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from './audio'
 import { computeMediaOffsetMs } from './offsets'
-import { StemCapture } from './stem'
+import { StemCapture, trimAndEncode } from './stem'
 
 export interface RecordingResult {
   blob: Blob
@@ -69,11 +69,11 @@ export class TakeRecorder {
   constructor(private stream: MediaStream) {}
 
   /**
-   * Round-trip recording latency: the singer HEARS the clicks/guide late by
-   * the output latency, and their voice reaches the graph late by the input
-   * latency — so everything they record lands (out + in) after the master
-   * grid. Every serious recording app compensates for this; the stem is
-   * trimmed at t0 + this value so sung notes sit ON the grid.
+   * API-reported round-trip latency — the FALLBACK only. Chrome's
+   * outputLatency fluctuates at runtime and Safari omits input latency, so
+   * per-take anchors built on this were unpredictably off. The primary
+   * measurement is the click bleed in stop(); this estimate covers the
+   * headphone case where the mic can't hear the clicks.
    */
   private measureLatencyComp(): number {
     const out = Math.min(Math.max(outputLatency(), 0), 0.35)
@@ -125,11 +125,30 @@ export class TakeRecorder {
   async stop(): Promise<RecordingResult> {
     const c = audioContext()
     const stopCtxTime = c.currentTime
+    const raw = this.stemCapture ? await this.stemCapture.stop() : null
+    this.stemCapture = null
+    // Round-trip latency: the singer hears the clicks late by the output
+    // latency and their voice arrives late by the input latency, so sung
+    // content lands (out + in) after the master grid. MEASURE it from the
+    // click bleed the mic captured — exact for this take, this device, this
+    // route (including Bluetooth, which no API reports). Only when there's
+    // no audible bleed (headphones) fall back to the API estimate.
+    let roundTripSec = this.latencyCompSec
+    if (raw) {
+      const measured = measureRoundTripSec(
+        raw.samples,
+        raw.sampleRate,
+        this.t0CtxTime - raw.startCtxTime,
+        { clicks: COUNT_IN_CLICKS, intervalSec: CLICK_INTERVAL_SEC },
+      )
+      if (measured !== null) roundTripSec = measured
+    }
     // Trim at the latency-compensated t0: sung content lands ON the master
     // grid whether the singer followed the clicks or the guide voices.
-    const anchorCtxTime = this.t0CtxTime + this.latencyCompSec
-    const stemBlob = this.stemCapture ? await this.stemCapture.stop(anchorCtxTime) : null
-    this.stemCapture = null
+    const anchorCtxTime = this.t0CtxTime + roundTripSec
+    const stemBlob = raw
+      ? trimAndEncode([raw.samples], raw.startCtxTime, anchorCtxTime, raw.sampleRate)
+      : null
     this.recorder?.stop()
     const blob = await this.stopped!
     // The `start`-event estimate misses the encoder's real start by a

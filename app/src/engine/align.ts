@@ -77,6 +77,137 @@ function rms(x: Float32Array): number {
  * Returns null when the media can't be decoded (iOS mp4) or the signals are
  * too quiet to trust — callers keep the estimate in that case.
  */
+// --- Count-in bleed round-trip measurement ----------------------------------
+//
+// Latency APIs lie: Chrome's AudioContext.outputLatency visibly fluctuates at
+// runtime and Safari reports no input latency at all, so an anchor built on
+// reported values shifts from take to take. But the mic physically HEARS the
+// count-in clicks bleed back in (speakers), and the click train's timing is
+// known exactly — correlating its envelope against the raw capture measures
+// this take's true speaker→air→mic round trip, the same quantity a DAW's
+// loopback calibration measures, per take and for free.
+
+const ENV_RATE = 1000 // Hz — 1 ms envelope resolution
+
+/**
+ * Transient-emphasis envelope: first difference (a crude high-pass that
+ * favors click edges over voice and room rumble), then per-window RMS.
+ */
+export function transientEnvelope(
+  signal: Float32Array,
+  sampleRate: number,
+  envRate = ENV_RATE,
+): Float32Array {
+  const win = Math.max(1, Math.round(sampleRate / envRate))
+  const n = Math.floor(signal.length / win)
+  const out = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    let s = 0
+    const base = i * win
+    for (let j = 0; j < win; j++) {
+      const k = base + j
+      const d = signal[k] - (k > 0 ? signal[k - 1] : 0)
+      s += d * d
+    }
+    out[i] = Math.sqrt(s / win)
+  }
+  return out
+}
+
+/** The count-in click train as an envelope-domain pattern (clicks decay ~90 ms, audio.ts). */
+export function clickEnvelopePattern(
+  clicks: number,
+  intervalSec: number,
+  envRate = ENV_RATE,
+): Float32Array {
+  const decaySec = 0.09
+  const tau = decaySec / Math.log(750) // click gain falls 0.75 → 0.001 over decaySec
+  const len = Math.round(((clicks - 1) * intervalSec + decaySec + 0.06) * envRate)
+  const out = new Float32Array(len)
+  const clickLen = Math.round((decaySec + 0.03) * envRate)
+  for (let c = 0; c < clicks; c++) {
+    const start = Math.round(c * intervalSec * envRate)
+    for (let i = 0; i < clickLen && start + i < len; i++) {
+      out[start + i] += Math.exp(-(i / envRate) / tau)
+    }
+  }
+  return out
+}
+
+/**
+ * Measure this take's round-trip (speaker→air→mic) latency from the click
+ * bleed in the raw capture. `t0OffsetSec` is where master t=0 (the first
+ * click's SCHEDULED time) sits in `raw`. Returns null when no confident bleed
+ * is found — headphones, or capture stopped mid–count-in — and the caller
+ * falls back to API-reported latency.
+ */
+export function measureRoundTripSec(
+  raw: Float32Array,
+  sampleRate: number,
+  t0OffsetSec: number,
+  opts: {
+    clicks: number
+    intervalSec: number
+    maxRoundTripSec?: number
+    minCorrelation?: number
+  },
+): number | null {
+  const maxRt = opts.maxRoundTripSec ?? 0.35
+  const minCorr = opts.minCorrelation ?? 0.4
+  if (t0OffsetSec < 0) return null
+  const clickSpanSec = (opts.clicks - 1) * opts.intervalSec + 0.2
+  if (raw.length / sampleRate < t0OffsetSec + clickSpanSec + maxRt) return null
+  const from = Math.floor(t0OffsetSec * sampleRate)
+  const to = Math.min(raw.length, Math.ceil((t0OffsetSec + clickSpanSec + maxRt) * sampleRate))
+  const env = transientEnvelope(raw.subarray(from, to), sampleRate)
+  const pattern = clickEnvelopePattern(opts.clicks, opts.intervalSec)
+  const K = pattern.length
+  const maxLag = Math.min(env.length - K, Math.round(maxRt * ENV_RATE))
+  if (maxLag < 0) return null
+
+  let pSum = 0
+  let pSq = 0
+  for (let k = 0; k < K; k++) {
+    pSum += pattern[k]
+    pSq += pattern[k] * pattern[k]
+  }
+  const pVar = pSq - (pSum * pSum) / K
+  if (pVar <= 0) return null
+
+  // Pearson correlation at every candidate lag: scale-free, so it rejects
+  // "just loud" windows and only fires on the 4-spike click rhythm. The
+  // click interval (660 ms) far exceeds maxRt, so no off-by-one-click peak
+  // can fall inside the search range.
+  let bestLag = -1
+  let bestR = -Infinity
+  for (let lag = 0; lag <= maxLag; lag++) {
+    let eSum = 0
+    let eSq = 0
+    let ep = 0
+    for (let k = 0; k < K; k++) {
+      const e = env[lag + k]
+      eSum += e
+      eSq += e * e
+      ep += e * pattern[k]
+    }
+    const eVar = eSq - (eSum * eSum) / K
+    if (eVar <= 0) continue
+    const r = (ep - (eSum * pSum) / K) / Math.sqrt(eVar * pVar)
+    if (r > bestR) {
+      bestR = r
+      bestLag = lag
+    }
+  }
+  if (bestLag < 0 || bestR < minCorr) return null
+  return bestLag / ENV_RATE
+}
+
+/**
+ * Measure the true mediaOffsetMs by aligning the media file's audio with the
+ * stem. Search is bounded to ±`searchMs` around the recorder's estimate.
+ * Returns null when the media can't be decoded (iOS mp4) or the signals are
+ * too quiet to trust — callers keep the estimate in that case.
+ */
 export async function refineMediaOffsetMs(
   media: Blob,
   stem: Blob,

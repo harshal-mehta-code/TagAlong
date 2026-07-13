@@ -84,6 +84,12 @@ export class PremixEngine {
 
   /** Offline-mix the prepared tracks (optionally a single soloed one) into a mono WAV. */
   async render(durationMs: number, soloId: string | null = null): Promise<Blob> {
+    const rendered = await this.renderBuffer(durationMs, soloId)
+    return encodeWav(rendered.getChannelData(0), RENDER_RATE)
+  }
+
+  /** Same offline mix as render(), returned as the raw AudioBuffer (mp4 pre-render feeds this to AAC). */
+  async renderBuffer(durationMs: number, soloId: string | null = null): Promise<AudioBuffer> {
     const length = Math.max(RENDER_RATE, Math.ceil(((durationMs + RENDER_TAIL_MS) / 1000) * RENDER_RATE))
     const oc = new OfflineAudioContext(1, length, RENDER_RATE)
     const master = oc.createGain()
@@ -106,8 +112,7 @@ export class PremixEngine {
       src.connect(master)
       src.start(sched.whenSec, sched.offsetSec)
     }
-    const rendered = await oc.startRendering()
-    return encodeWav(rendered.getChannelData(0), RENDER_RATE)
+    return oc.startRendering()
   }
 }
 

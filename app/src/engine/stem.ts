@@ -17,6 +17,14 @@ interface WorkletMsg {
   samples?: Float32Array
 }
 
+/** Untrimmed capture: recorder measures click-bleed latency on it, then trims. */
+export interface RawCapture {
+  samples: Float32Array
+  /** AudioContext time of samples[0] */
+  startCtxTime: number
+  sampleRate: number
+}
+
 // contexts whose worklet module is already loaded (it survives per context)
 const workletLoaded = new WeakSet<AudioContext>()
 
@@ -90,8 +98,8 @@ export class StemCapture {
     this.script.connect(this.silent)
   }
 
-  /** Stops capture and returns the WAV stem trimmed to start at t0 (or null if nothing captured). */
-  async stop(t0CtxTime: number): Promise<Blob | null> {
+  /** Stops capture and returns the raw untrimmed PCM (or null if nothing captured). */
+  async stop(): Promise<RawCapture | null> {
     if (this.worklet) {
       // ask the audio thread for its buffered tail; don't hang if it's gone
       await new Promise<void>((resolve) => {
@@ -111,8 +119,15 @@ export class StemCapture {
     this.worklet = null
     this.script = null
     if (this.chunks.length === 0 || this.firstChunkCtxTime === null) return null
-    const sr = audioContext().sampleRate
-    return trimAndEncode(this.chunks, this.firstChunkCtxTime, t0CtxTime, sr)
+    const total = this.chunks.reduce((n, c) => n + c.length, 0)
+    const samples = new Float32Array(total)
+    let pos = 0
+    for (const c of this.chunks) {
+      samples.set(c, pos)
+      pos += c.length
+    }
+    this.chunks = []
+    return { samples, startCtxTime: this.firstChunkCtxTime, sampleRate: audioContext().sampleRate }
   }
 }
 

@@ -3,19 +3,29 @@ import { useApp, useMediaUrl } from '../../appContext'
 import { OpenSlot, PartTag } from '../../components/ui'
 import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from '../../engine/audio'
 import { SyncController } from '../../player/SyncController'
-import { CollageAudio } from '../../player/premix'
+import { CollageAudio, PremixEngine } from '../../player/premix'
+import { canPrerender, renderPerformanceMp4 } from '../../player/prerender'
 import { PART_COLOR, PART_LABEL, type PartId, type Take } from '../../types'
 
 const COUNT_IN_MS = COUNT_IN_CLICKS * CLICK_INTERVAL_SEC * 1000
 // start just past the last click's decay so count-in bleed isn't audible
 const START_MS = Math.max(0, COUNT_IN_MS - 150)
+// end pad matches the live path's stop point (durationMs + 300)
+const END_PAD_MS = 300
 
 /**
- * The performed collage. All audio is pre-rendered offline into ONE file
- * played by a single <audio> element (CollageAudio) — deterministic on every
- * browser, and the only unmuted media element iOS allows. Videos are muted
- * visuals slaved to that element's clock. Learning mode (solo / slow-down /
- * loop) re-renders the mix or adjusts the element directly.
+ * The performed collage.
+ *
+ * Default watch path: the whole grid (video + mixed audio) is pre-rendered
+ * into ONE mp4 played by a single native <video> — A/V sync is the
+ * container's job, deterministic on every browser, and it is the one unmuted
+ * media element iOS allows. The render happens in the background and is
+ * cached in IndexedDB.
+ *
+ * Live path (fallback + learn mode): offline-premixed audio in one <audio>
+ * element (CollageAudio) with muted per-take videos slaved to its clock.
+ * Used while a render isn't ready, where WebCodecs can't encode (Firefox,
+ * desktop Linux), and whenever a part is soloed.
  */
 export function GridPlayer({
   parts, takesByPart, durationMs, onOpenSlot, quadrantOverlay, learn = true, cellHeight = 128,
@@ -40,6 +50,10 @@ export function GridPlayer({
   const loopRef = useRef(loop)
   loopRef.current = loop
   const fallbackIdsRef = useRef<Set<string>>(new Set())
+  const [renderUrl, setRenderUrl] = useState<string | null>(null)
+  const [rendering, setRendering] = useState(false)
+  const renderVideoRef = useRef<HTMLVideoElement | null>(null)
+  const renderPlayingRef = useRef(false)
 
   useEffect(() => () => { controller.destroy(); audio.destroy() }, [controller, audio])
 
@@ -64,6 +78,88 @@ export function GridPlayer({
     () => parts.flatMap((p) => (takesByPart[p] ? [[p, takesByPart[p]!] as const] : [])),
     [parts, takesByPart],
   )
+
+  // fingerprint of everything the mp4 render depends on — a change means the
+  // cached render is stale (bump v1 when the renderer itself changes)
+  const renderKey = useMemo(() => {
+    const slotSig = parts
+      .map((p) => {
+        const t = takesByPart[p]
+        return t ? `${t.takeId}@${t.mediaOffsetMs + t.nudgeMs}` : '-'
+      })
+      .join('|')
+    return `v1|${slotSig}|${durationMs}`
+  }, [parts, takesByPart, durationMs])
+
+  // background pre-render: cache hit shows instantly; a miss renders while
+  // the live path stays usable, then swaps in for the next play
+  useEffect(() => {
+    let cancelled = false
+    let url: string | null = null
+    setRenderUrl(null)
+    if (activeTakes.length === 0) return
+    const setKey = activeTakes.map(([, t]) => t.takeId).sort().join('|')
+    void (async () => {
+      try {
+        if (!(await canPrerender())) return
+        const cached = await store.getRender(setKey)
+        if (cancelled) return
+        if (cached && cached.key === renderKey) {
+          url = URL.createObjectURL(cached.blob)
+          setRenderUrl(url)
+          return
+        }
+        setRendering(true)
+        const engine = new PremixEngine()
+        const inputs = await Promise.all(
+          activeTakes.map(async ([, take]) => ({
+            id: take.takeId,
+            nudgeMs: take.nudgeMs,
+            stem: await store.getStem(take.takeId),
+            media: await store.getMedia(take.takeId),
+            mediaOffsetMs: take.mediaOffsetMs,
+          })),
+        )
+        const failed = await engine.prepare(inputs)
+        if (failed.size > 0 || cancelled) return // live path handles undecodable audio
+        const premix = await engine.renderBuffer(durationMs)
+        const slots = await Promise.all(
+          parts.map(async (p) => {
+            const take = takesByPart[p]
+            if (!take) return null
+            const media = await store.getMedia(take.takeId)
+            if (!media) throw new Error('media missing')
+            return { media, skewMs: take.mediaOffsetMs + take.nudgeMs }
+          }),
+        )
+        if (cancelled) return
+        const blob = await renderPerformanceMp4({
+          slots,
+          premix,
+          startMs: START_MS,
+          endMs: durationMs + END_PAD_MS,
+          cancelled: () => cancelled,
+        })
+        if (!blob || cancelled) return
+        await store.putRender(setKey, renderKey, activeTakes.map(([, t]) => t.takeId), blob)
+        url = URL.createObjectURL(blob)
+        setRenderUrl(url)
+      } catch (err) {
+        // the render is an upgrade — the live path keeps working without it
+        console.warn('collage pre-render failed; using live playback', err)
+      } finally {
+        if (!cancelled) setRendering(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+      if (url) URL.revokeObjectURL(url)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderKey, store])
+
+  // the rendered mp4 is the default watch path; solo needs the live mix
+  const usingRender = renderUrl !== null && solo === null
 
   // CollageAudio.load is keyed on take ids + nudges: picking a different
   // take re-renders the mix instead of silently reusing the old one
@@ -91,13 +187,34 @@ export function GridPlayer({
     }
   }
 
-  const toggle = async () => {
-    if (playing) {
+  const stopAll = () => {
+    if (renderPlayingRef.current) {
+      renderVideoRef.current?.pause()
+      renderPlayingRef.current = false
+    } else {
       controller.pause()
       audio.pause()
-      setPlaying(false)
+    }
+    setPlaying(false)
+  }
+
+  const toggle = async () => {
+    if (playing) {
+      stopAll()
       return
     }
+    if (usingRender && renderVideoRef.current) {
+      const v = renderVideoRef.current
+      if (v.ended) v.currentTime = 0
+      v.loop = loopRef.current
+      v.playbackRate = rate
+      ;(v as HTMLVideoElement & { preservesPitch?: boolean }).preservesPitch = true
+      await v.play().catch(() => { /* user will tap again */ })
+      renderPlayingRef.current = true
+      setPlaying(true)
+      return
+    }
+    renderPlayingRef.current = false
     await ensureLoaded()
     const tracks = activeTakes.flatMap(([p, take]) => {
       const el = refs.current[p]
@@ -117,6 +234,8 @@ export function GridPlayer({
 
   const onSolo = (p: PartId) => {
     const next = solo === p ? null : p
+    // solo switches between the rendered and live paths — never mid-play
+    if (playing) stopAll()
     setSolo(next)
     const take = next ? takesByPart[next] : undefined
     void audio.setSolo(take ? take.takeId : null)
@@ -127,19 +246,40 @@ export function GridPlayer({
     setRate(r)
     controller.setRate(r)
     audio.setRate(r)
+    const v = renderVideoRef.current
+    if (v) {
+      v.playbackRate = r
+      ;(v as HTMLVideoElement & { preservesPitch?: boolean }).preservesPitch = true
+    }
   }
+
+  // keep the mp4's native loop flag in step with the Loop toggle mid-play
+  useEffect(() => {
+    if (renderVideoRef.current) renderVideoRef.current.loop = loop
+  }, [loop])
 
   const anyTake = activeTakes.length > 0
 
   return (
     <div>
       <div className="relative">
-        <div className="grid grid-cols-2 gap-[3px] rounded-card overflow-hidden mx-auto">
+        {renderUrl && (
+          <video
+            ref={renderVideoRef}
+            data-testid="grid-render-video"
+            src={renderUrl}
+            playsInline
+            preload="auto"
+            onEnded={() => { renderPlayingRef.current = false; setPlaying(false) }}
+            className="absolute inset-0 w-full h-full object-cover rounded-card z-0"
+          />
+        )}
+        <div className="relative z-10 grid grid-cols-2 gap-[3px] rounded-card overflow-hidden mx-auto">
           {parts.map((p) => {
             const take = takesByPart[p]
             return take ? (
               <div key={p} className="relative" style={{ height: cellHeight }}>
-                <Cell take={take} setRef={(el) => { refs.current[p] = el }} />
+                <Cell take={take} transparent={usingRender} setRef={(el) => { refs.current[p] = el }} />
                 <PartTag part={p} />
                 {!playing && quadrantOverlay?.(p, take)}
                 {solo === p && (
@@ -163,6 +303,11 @@ export function GridPlayer({
           >
             {playing ? '❚❚' : <span className="pl-1">▶</span>}
           </button>
+        )}
+        {rendering && !renderUrl && (
+          <span className="absolute bottom-1.5 right-2 z-20 text-[9px] font-semibold uppercase tracking-wider text-ivory/80 bg-ink/60 rounded-full px-2 py-0.5 pointer-events-none">
+            sharpening…
+          </span>
         )}
       </div>
 
@@ -203,11 +348,23 @@ export function GridPlayer({
   )
 }
 
-function Cell({ take, setRef }: { take: Take; setRef: (el: HTMLVideoElement | null) => void }) {
+function Cell({ take, setRef, transparent }: {
+  take: Take
+  setRef: (el: HTMLVideoElement | null) => void
+  /** rendered-mp4 mode: keep the element mounted for the live fallback, but let the mp4 show through */
+  transparent?: boolean
+}) {
   const url = useMediaUrl(take.takeId)
   return url ? (
-    <video ref={setRef} src={url} muted playsInline preload="auto" className="w-full h-full object-cover bg-curtain" />
+    <video
+      ref={setRef}
+      src={url}
+      muted
+      playsInline
+      preload="auto"
+      className={`w-full h-full object-cover ${transparent ? 'invisible' : 'bg-curtain'}`}
+    />
   ) : (
-    <div className="w-full h-full bg-curtain" />
+    <div className={`w-full h-full ${transparent ? '' : 'bg-curtain'}`} />
   )
 }
