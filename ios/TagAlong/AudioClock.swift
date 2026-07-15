@@ -95,6 +95,13 @@ final class AudioClock {
 
     /// Blown-pipe tone: two detuned triangle-ish partials with a soft envelope.
     func playPitch(_ key: PitchKey, durationSec: Double = 1.4) {
+        // screens outside the record flow may never have configured the
+        // session — the default solo-ambient category is muted by the silent
+        // switch and can leave the engine unstartable. Claim playback first.
+        let category = AVAudioSession.sharedInstance().category
+        if category != .playback && category != .playAndRecord {
+            configureSession(recording: false)
+        }
         ensureRunning()
         let format = player.outputFormat(forBus: 0)
         let sr = format.sampleRate
@@ -113,7 +120,7 @@ final class AudioClock {
                 let ff = f * pow(2, detune / 1200)
                 v += sin(2 * .pi * ff * t) + 0.12 * sin(2 * .pi * 3 * ff * t)
             }
-            let sample = Float(env * v * 0.5)
+            let sample = Float(env * v * 0.35) // two partial pairs peak ~2.2 — keep under full scale
             for ch in 0..<Int(format.channelCount) {
                 buf.floatChannelData?[ch][i] = sample
             }

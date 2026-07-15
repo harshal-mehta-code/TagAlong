@@ -119,6 +119,15 @@ final class RecordController: ObservableObject {
         stage = .review
     }
 
+    /// The pending take was saved — hand ownership of the file to the Store.
+    /// MUST run before dismissal: the review sheet's dismiss handler discards,
+    /// and discarding a saved take deleted its media from disk (black cells).
+    func confirmSaved() {
+        pendingTake = nil
+        fileURL = nil
+        stage = .ready
+    }
+
     func discardPending() {
         if let take = pendingTake, let url = fileURL, url.lastPathComponent == take.fileName {
             try? FileManager.default.removeItem(at: url)

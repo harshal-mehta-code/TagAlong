@@ -303,6 +303,7 @@ struct RecordView: View {
                         var t = take
                         t.part = part
                         store.add(take: t)
+                        controller.confirmSaved() // before dismiss — or the discard handler deletes the saved file
                         controller.teardown()
                         dismiss()
                     },
