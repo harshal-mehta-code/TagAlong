@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bestLag, measureRoundTripSec, resampleTo } from './align'
+import { bestLag, measureRoundTripSec, resampleTo, suggestAlignmentMs } from './align'
 
 function noiseBurst(len: number, seed = 1): Float32Array {
   // deterministic pseudo-noise so the test can't flake
@@ -122,5 +122,69 @@ describe('measureRoundTripSec', () => {
 
   it('returns null on pure silence', () => {
     expect(measureRoundTripSec(new Float32Array(SR * 4), SR, 0.45, OPTS)).toBeNull()
+  })
+
+  it('works with the 3-click sound-check train', () => {
+    // same synth but only 3 clicks present — pattern must match what plays
+    const rt = 0.147
+    const x = synthCapture(0.35, rt)
+    // zero out the 4th click so the capture matches a 3-click check
+    const c4 = Math.round((0.35 + rt + 3 * INTERVAL) * SR)
+    x.fill(0, c4, Math.min(x.length, c4 + Math.round(0.12 * SR)))
+    const got = measureRoundTripSec(x, SR, 0.35, { clicks: 3, intervalSec: INTERVAL })
+    expect(got).not.toBeNull()
+    expect(Math.abs(got! - rt)).toBeLessThan(0.004)
+  })
+})
+
+describe('suggestAlignmentMs', () => {
+  const SR = 48_000
+
+  /**
+   * A sung phrase as an amplitude-modulated tone: syllable onsets every
+   * ~450 ms with fast attacks — the homorhythmic structure the auto-align
+   * keys on. `lagMs` shifts the whole performance late.
+   */
+  function sungPhrase(lagMs: number, freq: number, seconds = 8, seed = 7): Float32Array {
+    const x = new Float32Array(Math.round(seconds * SR))
+    // irregular syllable gaps like real lyrics — a perfectly periodic train
+    // is deliberately rejected by the ambiguity gate (rival peak a beat away)
+    const gaps = [0.45, 0.32, 0.61, 0.38, 0.52, 0.29]
+    const onsets: number[] = []
+    for (let t = 0.4, k = 0; t < seconds - 0.6; t += gaps[k++ % gaps.length]) {
+      onsets.push(t + lagMs / 1000)
+    }
+    const n = noiseBurst(x.length, seed)
+    for (const on of onsets) {
+      const start = Math.round(on * SR)
+      const len = Math.round(0.3 * SR)
+      for (let i = 0; i < len && start + i >= 0 && start + i < x.length; i++) {
+        const t = i / SR
+        const env = Math.min(1, t / 0.02) * Math.exp(-t / 0.12)
+        x[start + i] += env * (0.4 * Math.sin(2 * Math.PI * freq * t) + 0.05 * n[start + i])
+      }
+    }
+    return x
+  }
+
+  it('recovers how late the user sang within 5 ms', () => {
+    for (const lag of [0, 62, -85, 180]) {
+      const user = sungPhrase(lag, 220)
+      const guide = sungPhrase(0, 330, 8, 11)
+      const got = suggestAlignmentMs(user, SR, guide, SR)
+      expect(got).not.toBeNull()
+      expect(Math.abs(got! - lag)).toBeLessThanOrEqual(5)
+    }
+  })
+
+  it('returns null when the user signal has no matching rhythm', () => {
+    const guide = sungPhrase(0, 330)
+    const user = noiseBurst(8 * SR, 3)
+    for (let i = 0; i < user.length; i++) user[i] *= 0.05
+    expect(suggestAlignmentMs(user, SR, guide, SR)).toBeNull()
+  })
+
+  it('returns null on too-short material', () => {
+    expect(suggestAlignmentMs(new Float32Array(SR), SR, new Float32Array(SR), SR)).toBeNull()
   })
 })

@@ -33,7 +33,10 @@ test('core loop: start, tag along ×3, performance completes and plays', async (
   await page.getByTestId('tag-title').fill('Lost Chord')
   await page.getByTestId('part-lead').click()
   await page.getByTestId('key-B♭').click()
-  await page.getByTestId('pitch-pipe').click() // must not throw
+  // pitch pipe is a corner FAB opening a sheet; blowing must not throw
+  await page.getByTestId('pitch-pipe').click()
+  await page.getByTestId('pitch-pipe-blow').click()
+  await page.getByTestId('pitch-pipe-close').click()
   await page.getByTestId('to-record').click()
 
   await recordCurrentPart(page)

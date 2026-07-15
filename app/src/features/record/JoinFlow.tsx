@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useApp } from '../../appContext'
+import { PitchPipeFab } from '../../components/PitchPipeFab'
 import { Button, Screen } from '../../components/ui'
-import { ensureRunning, playPitch } from '../../engine/audio'
+import { runSoundCheck, storedCalibration } from '../../engine/calibration'
 import { performanceFromCombo, withTimeout } from '../../store/localStore'
 import { newId } from '../../store/perfId'
 import { PART_COLOR, PART_LABEL, type PartId, type Tag, type Take } from '../../types'
@@ -28,6 +29,12 @@ export default function JoinFlow() {
   const [step, setStep] = useState<Step>('preflight')
   const [headphonesOk, setHeadphonesOk] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [soundCheck, setSoundCheck] = useState<'idle' | 'running' | 'done' | 'failed'>(
+    () => (storedCalibration() ? 'done' : 'idle'),
+  )
+  const [soundCheckMs, setSoundCheckMs] = useState<number | null>(
+    () => { const c = storedCalibration(); return c ? Math.round(c.roundTripSec * 1000) : null },
+  )
   const [completedPerfId, setCompletedPerfId] = useState<string | null>(null)
   const [loadError, setLoadError] = useState(false)
   const guideEls = useRef<Record<string, HTMLVideoElement | null>>({})
@@ -77,6 +84,7 @@ export default function JoinFlow() {
       mimeType: result.mimeType,
       guideTakeIds: guides.map((g) => g.takeId),
       createdAt: Date.now(),
+      anchorSource: result.anchorSource,
     }
     try {
       await withTimeout(
@@ -125,25 +133,39 @@ export default function JoinFlow() {
           <div className="bg-curtain-card border border-curtain-line rounded-card p-5">
             <h3 className="font-serif text-lg font-semibold mb-3">Before you sing</h3>
             <ol className="text-[13.5px] text-[#A99FB6] leading-relaxed space-y-2.5 list-decimal pl-4">
-              <li><b className="text-[#F0EAE0]">Put on headphones.</b> You'll see and hear the {guides.length === 1 ? 'other part' : guides.length > 1 ? `other ${guides.length} parts` : 'other parts'} while you record — without headphones they'd bleed into your mic.</li>
-              <li>The pitch pipe is on the record screen — tap it any time before you start.</li>
+              <li><b className="text-[#F0EAE0]">Run the sound check below</b> with headphones OFF — 2 seconds of clicks measure your device's audio delay so your take lands in time.</li>
+              <li><b className="text-[#F0EAE0]">Then put on headphones.</b> You'll see and hear the {guides.length === 1 ? 'other part' : guides.length > 1 ? `other ${guides.length} parts` : 'other parts'} while you record. Wired beats Bluetooth — Bluetooth adds delay no app can measure.</li>
+              <li>Need your note? The pitch pipe floats in the corner.</li>
               <li>Four clicks count you in, then everyone's singing.</li>
-              <li>If your timing feels off afterwards, the nudge slider fixes it.</li>
             </ol>
           </div>
 
-          <div className="text-center mt-6">
-            <button
-              data-testid="pitch-pipe"
-              onClick={async () => { await ensureRunning(); playPitch(tag.key, tag.voicing === 'ssaa' ? 1 : 0) }}
-              className="w-[110px] h-[110px] rounded-full mx-auto flex flex-col items-center justify-center text-[#2e2410] active:scale-95 transition-transform
-                bg-[radial-gradient(circle_at_34%_28%,#E3C685,#C79A3D_52%,#8a6a24)]
-                shadow-[0_10px_30px_rgba(199,154,61,.35),inset_0_-5px_14px_rgba(80,58,10,.45)]"
-              aria-label={`Play pitch ${tag.key}`}
+          <div className="bg-curtain-card border border-curtain-line rounded-card p-4 mt-4 flex items-center justify-between gap-3">
+            <div className="text-[13px] font-semibold">
+              {soundCheck === 'done' && soundCheckMs !== null ? (
+                <span className="text-[#8fbf9f]">✓ Sound check done — {soundCheckMs} ms delay measured</span>
+              ) : soundCheck === 'running' ? (
+                <span className="text-brass">Listen… measuring the clicks</span>
+              ) : soundCheck === 'failed' ? (
+                <span className="text-[#d68a8a]">Couldn't hear the clicks — headphones off, volume up, try again</span>
+              ) : (
+                <span>Sound check <span className="text-[#A99FB6] font-normal">· speaker + mic, ~2 s</span></span>
+              )}
+            </div>
+            <Button
+              kind="ghost-dark"
+              className="!w-auto px-4 !py-2 !text-[12.5px] shrink-0"
+              testId="sound-check"
+              disabled={soundCheck === 'running'}
+              onClick={async () => {
+                setSoundCheck('running')
+                const r = await runSoundCheck()
+                if (r.ok) { setSoundCheckMs(r.roundTripMs); setSoundCheck('done') }
+                else setSoundCheck('failed')
+              }}
             >
-              <span className="font-serif text-[30px] font-bold leading-none">{tag.key}</span>
-              <span className="text-[8px] font-bold uppercase tracking-[.13em] mt-1">blow pitch</span>
-            </button>
+              {soundCheck === 'done' ? 'Redo' : 'Run'}
+            </Button>
           </div>
 
           <label className="flex items-center gap-3 mt-6 text-[13.5px] font-semibold">
@@ -167,6 +189,7 @@ export default function JoinFlow() {
               I'm ready →
             </Button>
           </div>
+          <PitchPipeFab pitchKey={tag.key} octaveShift={tag.voicing === 'ssaa' ? 1 : 0} />
         </div>
       )}
 

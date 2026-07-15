@@ -186,9 +186,14 @@ export const CLICK_INTERVAL_SEC = 0.66 // ~91 bpm
  * click — that instant is the master timeline's t=0 (doc 04).
  */
 export function scheduleCountIn(startInSec = 0.35): number {
+  return scheduleClicks(COUNT_IN_CLICKS, startInSec)
+}
+
+/** Schedule `count` clicks; returns the ctx time of the first (master t=0). */
+export function scheduleClicks(count: number, startInSec = 0.35): number {
   const c = audioContext()
   const first = c.currentTime + startInSec
-  for (let i = 0; i < COUNT_IN_CLICKS; i++) {
+  for (let i = 0; i < count; i++) {
     const t = first + i * CLICK_INTERVAL_SEC
     const osc = c.createOscillator()
     osc.type = 'square'

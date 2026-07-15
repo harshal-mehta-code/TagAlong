@@ -1,4 +1,5 @@
 import { audioContext } from './audio'
+import { decodeMediaAudio } from './mediaAudio'
 
 /**
  * Post-recording sync refinement. The take's video file and its PCM stem
@@ -215,10 +216,10 @@ export async function refineMediaOffsetMs(
   searchMs = 350,
 ): Promise<number | null> {
   const c = audioContext()
-  let mediaBuf: AudioBuffer
+  const mediaBuf = await decodeMediaAudio(media)
+  if (!mediaBuf) return null
   let stemBuf: AudioBuffer
   try {
-    mediaBuf = await c.decodeAudioData(await media.arrayBuffer())
     stemBuf = await c.decodeAudioData(await stem.arrayBuffer())
   } catch {
     return null
@@ -231,4 +232,69 @@ export async function refineMediaOffsetMs(
   const lag = bestLag(m, s, approxLag - span, approxLag + span)
   if (lag === null) return null
   return (lag / WORK_RATE) * 1000
+}
+
+// --- Content auto-align (headphone joins) -----------------------------------
+//
+// With headphones on, the mic never hears the count-in bleed, so the anchor
+// falls back to calibration or an API guess. But barbershop is homorhythmic:
+// every part articulates the same words together, so the ENVELOPE of the new
+// take correlates with the envelope of the guide mix the singer heard — at a
+// lag equal to how late the take landed. That lag IS the nudge that fixes it.
+
+/**
+ * How many ms `user` lags `guide` (positive = user is late). Both signals are
+ * on the master timeline (stem/premix). Confidence-gated: returns null unless
+ * the correlation peak is strong AND clearly beats every rival lag, so a
+ * sustained-chord passage or unrelated singing can't produce a false shift.
+ */
+export function suggestAlignmentMs(
+  user: Float32Array,
+  userRate: number,
+  guide: Float32Array,
+  guideRate: number,
+  opts?: { maxLagMs?: number; minCorrelation?: number; minMargin?: number },
+): number | null {
+  const maxLag = Math.round(opts?.maxLagMs ?? 300) // env is 1 ms/sample
+  const minCorr = opts?.minCorrelation ?? 0.5
+  const minMargin = opts?.minMargin ?? 0.08
+  const eu = transientEnvelope(user, userRate)
+  const eg = transientEnvelope(guide, guideRate)
+  const n = Math.min(eu.length, eg.length) - maxLag
+  if (n < 2000) return null // < 2 s of comparable material
+
+  const corrAt = (lag: number): number => {
+    // correlate eu[i + lag] against eg[i] over the safe overlap
+    let uS = 0, uQ = 0, gS = 0, gQ = 0, ug = 0
+    let count = 0
+    for (let i = maxLag; i < n; i++) {
+      const u = eu[i + lag]
+      const g = eg[i]
+      uS += u; uQ += u * u; gS += g; gQ += g * g; ug += u * g
+      count++
+    }
+    const uVar = uQ - (uS * uS) / count
+    const gVar = gQ - (gS * gS) / count
+    if (uVar <= 0 || gVar <= 0) return -1
+    return (ug - (uS * gS) / count) / Math.sqrt(uVar * gVar)
+  }
+
+  let bestLag = 0
+  let bestR = -Infinity
+  const rs = new Float32Array(2 * maxLag + 1)
+  for (let lag = -maxLag; lag <= maxLag; lag++) {
+    const r = corrAt(lag)
+    rs[lag + maxLag] = r
+    if (r > bestR) { bestR = r; bestLag = lag }
+  }
+  if (bestR < minCorr) return null
+  // rival check: best correlation more than 40 ms away must be clearly worse
+  let rival = -Infinity
+  for (let lag = -maxLag; lag <= maxLag; lag++) {
+    if (Math.abs(lag - bestLag) <= 40) continue
+    const r = rs[lag + maxLag]
+    if (r > rival) rival = r
+  }
+  if (bestR - rival < minMargin) return null
+  return bestLag
 }

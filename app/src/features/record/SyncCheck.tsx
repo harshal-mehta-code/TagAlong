@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp, useMediaUrl } from '../../appContext'
 import { Button, Grid, PartTag } from '../../components/ui'
-import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from '../../engine/audio'
+import { suggestAlignmentMs } from '../../engine/align'
+import { audioContext, COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from '../../engine/audio'
 import { clampNudgeMs } from '../../engine/offsets'
 import type { RecordingResult } from '../../engine/recorder'
-import { CollageAudio } from '../../player/premix'
+import { CollageAudio, PremixEngine } from '../../player/premix'
 import { SyncController } from '../../player/SyncController'
 import { PART_COLOR, PART_LABEL, type PartId, type Take } from '../../types'
 
@@ -38,6 +39,8 @@ export function SyncCheck({
   const userVideoRef = useRef<HTMLVideoElement>(null)
   const guideRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const nudgeTimerRef = useRef(0)
+  const nudgeTouchedRef = useRef(false)
+  const [autoAligned, setAutoAligned] = useState(false)
   const userUrl = useMemo(() => URL.createObjectURL(result.blob), [result.blob])
 
   // start just after the last click's decay so count-in bleed isn't audible
@@ -50,6 +53,51 @@ export function SyncCheck({
     controller.destroy()
     audio.destroy()
   }, [controller, audio])
+
+  // Content auto-align for headphone joins: with no click bleed the anchor is
+  // a calibration or API estimate, so measure the take's placement against
+  // the guide mix the singer actually heard (barbershop is homorhythmic — the
+  // envelopes correlate at the true lag) and pre-set the nudge. Confidence-
+  // gated inside suggestAlignmentMs; the slider stays the final authority.
+  useEffect(() => {
+    if (guides.length === 0 || !result.stemBlob || result.anchorSource === 'bleed') return
+    let alive = true
+    void (async () => {
+      try {
+        const c = audioContext()
+        const userBuf = await c.decodeAudioData(await result.stemBlob!.arrayBuffer())
+        const engine = new PremixEngine()
+        const failed = await engine.prepare(
+          await Promise.all(
+            guides.map(async (g) => ({
+              id: g.takeId,
+              nudgeMs: g.nudgeMs,
+              stem: await store.getStem(g.takeId),
+              media: await store.getMedia(g.takeId),
+              mediaOffsetMs: g.mediaOffsetMs,
+            })),
+          ),
+        )
+        if (failed.size > 0 || !alive) return
+        const guideBuf = await engine.renderBuffer(loopEndMs)
+        // skip the count-in: both signals carry click bleed there, and
+        // aligning bleed-to-bleed would undo the singing alignment
+        const from = (buf: AudioBuffer) =>
+          buf.getChannelData(0).subarray(Math.min(buf.length, Math.round((COUNT_IN_MS / 1000) * buf.sampleRate)))
+        const lagMs = suggestAlignmentMs(
+          from(userBuf), userBuf.sampleRate, from(guideBuf), guideBuf.sampleRate,
+        )
+        if (!alive || lagMs === null || lagMs === 0 || nudgeTouchedRef.current) return
+        const v = clampNudgeMs(lagMs)
+        setNudge(v)
+        setAutoAligned(true)
+        controller.updateNudge('user', v)
+        void audio.setNudge('user', v)
+      } catch { /* best-effort — the slider is still there */ }
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result])
 
   useEffect(() => {
     controller.onTick = (ms) => {
@@ -104,6 +152,9 @@ export function SyncCheck({
       }),
     ]
     controller.setTracks(tracks)
+    // videos parked on their start frames BEFORE the audio gun (same order as
+    // the main-screen player, so review and collage start identically)
+    await controller.preroll(loopStartMs)
     await audio.play(loopStartMs)
     controller.setClock(() => audio.masterMs())
     await controller.play(loopStartMs)
@@ -111,6 +162,8 @@ export function SyncCheck({
   }
 
   const onNudge = (v: number) => {
+    nudgeTouchedRef.current = true
+    setAutoAligned(false)
     const clamped = clampNudgeMs(v)
     setNudge(clamped)
     controller.updateNudge('user', clamped)
@@ -130,8 +183,9 @@ export function SyncCheck({
           {parts.map((p) =>
             p === part ? (
               <div key={p} className="relative h-[108px]" style={{ border: '2px solid #D64545' }}>
+                {/* unmirrored: the review must look exactly like the final collage */}
                 <video ref={userVideoRef} src={userUrl} muted playsInline preload="auto"
-                  className="w-full h-full object-cover [transform:scaleX(-1)] bg-curtain" />
+                  className="w-full h-full object-cover bg-curtain" />
                 <span className="absolute left-1.5 bottom-1.5 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full text-white z-10"
                   style={{ background: PART_COLOR[p] }}>you</span>
               </div>
@@ -171,6 +225,12 @@ export function SyncCheck({
         <div className="flex justify-between text-[10px] font-semibold text-[#776b85] mt-1.5">
           <span>◂ Earlier</span><span>Later ▸</span>
         </div>
+        <p className="text-[10.5px] font-semibold text-[#776b85] mt-2" data-testid="anchor-hint">
+          {result.anchorSource === 'bleed' && 'Timing measured from your speaker — should already be tight.'}
+          {result.anchorSource === 'calibration' && !autoAligned && 'Timing from your device sound check — listen once and fine-tune if needed.'}
+          {result.anchorSource === 'api' && !autoAligned && 'Timing is estimated on this setup — listen once and adjust the slider if you sound early or late.'}
+          {autoAligned && result.anchorSource !== 'bleed' && 'Timing auto-matched to the other parts ✓ — fine-tune if needed.'}
+        </p>
       </div>
 
       <div className="flex gap-2.5 mt-6">

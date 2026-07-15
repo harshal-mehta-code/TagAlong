@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../../appContext'
+import { PitchPipeFab } from '../../components/PitchPipeFab'
 import { Button, PartChip, Screen } from '../../components/ui'
-import { ensureRunning, playPitch, COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from '../../engine/audio'
+import { COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from '../../engine/audio'
 import { withTimeout } from '../../store/localStore'
 import { newId } from '../../store/perfId'
 import { KEYS, PART_ORDER, type Key, type PartId, type Tag, type Take, type Voicing } from '../../types'
@@ -54,6 +55,7 @@ export default function StartTagFlow() {
       mimeType: result.mimeType,
       guideTakeIds: [],
       createdAt: Date.now(),
+      anchorSource: result.anchorSource,
     }
     try {
       await store.createTag(tag)
@@ -110,21 +112,6 @@ export default function StartTagFlow() {
             ))}
           </div>
 
-          <div className="text-center mt-6">
-            <button
-              data-testid="pitch-pipe"
-              onClick={async () => { await ensureRunning(); playPitch(key, voicing === 'ssaa' ? 1 : 0) }}
-              className="w-[134px] h-[134px] rounded-full mx-auto flex flex-col items-center justify-center text-[#2e2410] active:scale-95 transition-transform relative
-                bg-[radial-gradient(circle_at_34%_28%,#E3C685,#C79A3D_52%,#8a6a24)]
-                shadow-[0_10px_30px_rgba(199,154,61,.35),inset_0_-5px_14px_rgba(80,58,10,.45),inset_0_4px_8px_rgba(255,240,200,.5)]
-                after:content-[''] after:absolute after:inset-[11px] after:rounded-full after:border after:border-[#3c2c08]/35"
-              aria-label={`Play pitch ${key}`}
-            >
-              <span className="font-serif text-[36px] font-bold leading-none">{key}</span>
-              <span className="text-[8.5px] font-bold uppercase tracking-[.13em] mt-1">tap to blow pitch</span>
-            </button>
-          </div>
-
           <div className="flex gap-1.5 justify-center flex-wrap mt-5 px-1 text-[12px] font-bold tabular-nums">
             {KEYS.map((k) => (
               <button key={k} data-testid={`key-${k}`} onClick={() => setKey(k)}
@@ -139,6 +126,7 @@ export default function StartTagFlow() {
               Continue →
             </Button>
           </div>
+          <PitchPipeFab pitchKey={key} octaveShift={voicing === 'ssaa' ? 1 : 0} />
         </div>
       )}
 

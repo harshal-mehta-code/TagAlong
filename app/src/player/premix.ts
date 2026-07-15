@@ -1,4 +1,5 @@
 import { audioContext } from '../engine/audio'
+import { decodeMediaAudio } from '../engine/mediaAudio'
 import { encodeWav } from '../engine/stem'
 
 /**
@@ -65,12 +66,10 @@ export class PremixEngine {
         } catch { /* fall through to media */ }
       }
       if (!track && input.media) {
-        try {
-          track = {
-            buffer: await c.decodeAudioData(await input.media.arrayBuffer()),
-            baseSkewMs: input.mediaOffsetMs ?? 0,
-          }
-        } catch { /* undecodable — caller may unmute that video as last resort */ }
+        // decodeMediaAudio demuxes mp4 video blobs via WebCodecs where
+        // decodeAudioData refuses them (iOS Safari)
+        const buffer = await decodeMediaAudio(input.media)
+        if (buffer) track = { buffer, baseSkewMs: input.mediaOffsetMs ?? 0 }
       }
       if (track) this.prepared.set(input.id, track)
       else this.failed.add(input.id)

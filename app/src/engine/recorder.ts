@@ -1,7 +1,11 @@
 import { measureRoundTripSec, refineMediaOffsetMs } from './align'
 import { audioContext, outputLatency, scheduleCountIn, setAudioSessionType, COUNT_IN_CLICKS, CLICK_INTERVAL_SEC } from './audio'
+import { storedCalibration } from './calibration'
 import { computeMediaOffsetMs } from './offsets'
 import { StemCapture, trimAndEncode } from './stem'
+
+/** Which measurement anchored the stem, best to worst. */
+export type AnchorSource = 'bleed' | 'calibration' | 'api'
 
 export interface RecordingResult {
   blob: Blob
@@ -12,6 +16,8 @@ export interface RecordingResult {
   mediaOffsetMs: number
   /** length of the sung portion (after t=0 + count-in), ms */
   sungDurationMs: number
+  /** which latency measurement anchored this take (drives review-screen hints) */
+  anchorSource: AnchorSource
 }
 
 function pickMimeType(): string {
@@ -134,6 +140,14 @@ export class TakeRecorder {
     // route (including Bluetooth, which no API reports). Only when there's
     // no audible bleed (headphones) fall back to the API estimate.
     let roundTripSec = this.latencyCompSec
+    let anchorSource: AnchorSource = 'api'
+    const cal = storedCalibration()
+    if (cal) {
+      // sound-check value beats the API estimate: it was MEASURED on this
+      // device (headphones share the speaker path's converter latency)
+      roundTripSec = cal.roundTripSec
+      anchorSource = 'calibration'
+    }
     if (raw) {
       const measured = measureRoundTripSec(
         raw.samples,
@@ -141,7 +155,10 @@ export class TakeRecorder {
         this.t0CtxTime - raw.startCtxTime,
         { clicks: COUNT_IN_CLICKS, intervalSec: CLICK_INTERVAL_SEC },
       )
-      if (measured !== null) roundTripSec = measured
+      if (measured !== null) {
+        roundTripSec = measured
+        anchorSource = 'bleed'
+      }
     }
     // Trim at the latency-compensated t0: sung content lands ON the master
     // grid whether the singer followed the clicks or the guide voices.
@@ -169,6 +186,7 @@ export class TakeRecorder {
       stemBlob,
       mediaOffsetMs,
       sungDurationMs: Math.max(0, (stopCtxTime - this.singStartCtxTime) * 1000),
+      anchorSource,
     }
   }
 

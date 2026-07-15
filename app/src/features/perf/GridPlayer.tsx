@@ -226,6 +226,9 @@ export function GridPlayer({
     applyVideoAudio(solo)
     const pos = audio.masterMs()
     const fromMs = pos > START_MS && pos < durationMs ? pos : START_MS
+    // videos first: decoded and parked on their start frames, THEN the audio
+    // gun — otherwise they join the running audio late and get yanked in
+    await controller.preroll(fromMs)
     await audio.play(fromMs)
     controller.setClock(() => audio.masterMs())
     await controller.play(fromMs)
@@ -304,12 +307,12 @@ export function GridPlayer({
             {playing ? '❚❚' : <span className="pl-1">▶</span>}
           </button>
         )}
-        {rendering && !renderUrl && (
-          <span className="absolute bottom-1.5 right-2 z-20 text-[9px] font-semibold uppercase tracking-wider text-ivory/80 bg-ink/60 rounded-full px-2 py-0.5 pointer-events-none">
-            sharpening…
-          </span>
-        )}
       </div>
+      {rendering && !renderUrl && (
+        <div className="text-center text-[9.5px] font-semibold uppercase tracking-wider text-ink-soft mt-1.5">
+          sharpening the final mix…
+        </div>
+      )}
 
       {learn && anyTake && (
         <div className="mt-3 space-y-2">

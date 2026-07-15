@@ -45,6 +45,8 @@ export interface Take {
   mimeType: string
   guideTakeIds: string[]
   createdAt: number
+  /** which latency measurement anchored the stem ('bleed' | 'calibration' | 'api') — debugging aid */
+  anchorSource?: string
 }
 
 export interface Performance {

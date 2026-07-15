@@ -48,13 +48,48 @@ export class SyncController {
     return this.masterBaseMs + (performance.now() - this.masterStartPerf) * this.rate
   }
 
+  /**
+   * Seek every track to its start position and wait until frames are decoded
+   * and ready. Callers preroll BEFORE starting the audio: without it the
+   * audio began immediately while videos were still seeking, so they joined
+   * 100–300 ms late and were visibly yanked into place.
+   */
+  async preroll(fromMs: number, timeoutMs = 1500): Promise<void> {
+    this.masterBaseMs = fromMs
+    await Promise.all(
+      this.tracks.map((t) => {
+        const target = mediaTimeForMasterMs(fromMs, t.mediaOffsetMs, t.nudgeMs)
+        if (Math.abs(t.el.currentTime - target) > 0.03) t.el.currentTime = target
+        if (t.el.readyState >= 3 && !t.el.seeking) return
+        return new Promise<void>((resolve) => {
+          const check = () => {
+            if (t.el.readyState >= 3 && !t.el.seeking) done()
+          }
+          const done = () => {
+            clearTimeout(timer)
+            t.el.removeEventListener('seeked', check)
+            t.el.removeEventListener('canplaythrough', check)
+            resolve()
+          }
+          const timer = setTimeout(done, timeoutMs) // never hang on a stalled decoder
+          t.el.addEventListener('seeked', check)
+          t.el.addEventListener('canplaythrough', check)
+          check()
+        })
+      }),
+    )
+  }
+
   async play(fromMs?: number): Promise<void> {
     if (fromMs !== undefined) this.masterBaseMs = fromMs
     this.masterStartPerf = performance.now()
     this._playing = true
     await Promise.all(
       this.tracks.map(async (t) => {
-        t.el.currentTime = mediaTimeForMasterMs(this.masterMs, t.mediaOffsetMs, t.nudgeMs)
+        const target = mediaTimeForMasterMs(this.masterMs, t.mediaOffsetMs, t.nudgeMs)
+        // skip the seek when preroll already positioned this element —
+        // re-seeking would throw away its decoded frames at the gun
+        if (Math.abs(t.el.currentTime - target) > 0.03) t.el.currentTime = target
         t.el.playbackRate = this.rate
         try { await t.el.play() } catch { /* autoplay policies; user will tap again */ }
       }),
