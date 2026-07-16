@@ -23,7 +23,7 @@ struct RootView: View {
     enum Tab { case watch, sing }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
+        ZStack {
             Theme.bg.ignoresSafeArea()
             Group {
                 switch tab {
@@ -31,8 +31,11 @@ struct RootView: View {
                 case .sing:  SingView()
                 }
             }
-            BottomBar(tab: $tab)
         }
+        // The bar is a safe-area inset, not an overlay: everything lays out
+        // above it by default, and full-bleed layers opt out explicitly with
+        // .ignoresSafeArea() — nothing lands under the bar by accident.
+        .safeAreaInset(edge: .bottom, spacing: 0) { BottomBar(tab: $tab) }
         .ignoresSafeArea(.keyboard)
     }
 }
@@ -47,7 +50,7 @@ struct BottomBar: View {
         }
         .padding(.top, 8)
         .padding(.bottom, 4)
-        .background(.ultraThinMaterial)
+        .background(.ultraThinMaterial) // extends into the home-indicator area
         .overlay(alignment: .top) { Rectangle().fill(Theme.line).frame(height: 0.5) }
     }
 
@@ -78,25 +81,33 @@ struct WatchFeedView: View {
     }
 
     var body: some View {
-        ZStack {
-            Theme.stageGradient.ignoresSafeArea()
-            if completed.isEmpty {
-                FeedEmptyState()
-            } else {
-                ScrollView(.vertical) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(completed) { tag in
-                            FeedPage(tag: tag, isCurrent: currentId == tag.id)
-                                .containerRelativeFrame([.horizontal, .vertical])
-                                .id(tag.id)
+        // The GeometryReader sits in normal, safe-area-respecting layout, so
+        // its insets are the real device + tab-bar insets. Only the pager goes
+        // full-bleed; each page pads its overlay chrome by these insets.
+        GeometryReader { geo in
+            ZStack {
+                Theme.stageGradient.ignoresSafeArea()
+                if completed.isEmpty {
+                    FeedEmptyState().frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView(.vertical) {
+                        LazyVStack(spacing: 0) {
+                            ForEach(completed) { tag in
+                                FeedPage(tag: tag,
+                                         isCurrent: currentId == tag.id,
+                                         insets: geo.safeAreaInsets)
+                                    .containerRelativeFrame([.horizontal, .vertical])
+                                    .id(tag.id)
+                            }
                         }
+                        .scrollTargetLayout()
                     }
-                    .scrollTargetLayout()
+                    .scrollTargetBehavior(.paging)
+                    .scrollPosition(id: $currentId)
+                    .scrollIndicators(.hidden)
+                    .ignoresSafeArea()
+                    .onAppear { if currentId == nil { currentId = completed.first?.id } }
                 }
-                .scrollTargetBehavior(.paging)
-                .scrollPosition(id: $currentId)
-                .ignoresSafeArea()
-                .onAppear { if currentId == nil { currentId = completed.first?.id } }
             }
         }
     }
@@ -126,10 +137,10 @@ struct FeedPage: View {
     @EnvironmentObject var store: Store
     let tag: SongTag
     let isCurrent: Bool
+    let insets: EdgeInsets
 
     @StateObject private var player = QuartetPlayer()
     @State private var userPaused = false
-    @State private var showedSoloHint = false
 
     private var quartet: [Part: Take] { store.quartet(for: tag.id) }
 
@@ -137,21 +148,20 @@ struct FeedPage: View {
         ZStack {
             Color.black
             QuartetGrid(quartet: quartet, player: player, soloable: true, onOpenPart: { _ in })
-                .ignoresSafeArea()
 
+            // overlay chrome padded by the real safe-area insets (the pager
+            // ignores safe areas, so they must be applied by hand here)
             VStack {
                 topBar
                 Spacer()
-            }
-
-            transportButton
-
-            if let solo = player.solo {
-                VStack {
-                    Spacer()
-                    SoloPill(part: solo).padding(.bottom, 96)
+                if let solo = player.solo {
+                    SoloPill(part: solo).padding(.bottom, 16)
                 }
             }
+            .padding(.top, insets.top)
+            .padding(.bottom, insets.bottom)
+
+            transportButton
         }
         .onAppear { if isCurrent { activate() } }
         .onChange(of: isCurrent) { _, cur in cur ? activate() : deactivate() }
@@ -186,9 +196,9 @@ struct FeedPage: View {
             }
         }
         .padding(.horizontal, 18)
-        .padding(.top, 8)
+        .padding(.top, 6)
         .padding(.bottom, 40)
-        .background(Theme.scrim(.top).ignoresSafeArea(edges: .top))
+        .background(Theme.scrim(.top).padding(.top, -insets.top)) // scrim reaches the physical top
     }
 
     private var transportButton: some View {
@@ -208,9 +218,10 @@ struct FeedPage: View {
                 .background(.ultraThinMaterial, in: Circle())
                 .overlay(Circle().stroke(.white.opacity(0.2), lineWidth: 1))
         }
-        .opacity(player.isPlaying ? 0.0 : 1)
+        // stays faintly visible while playing — transport must never be
+        // unreachable (a hidden button + a stalled player = a dead screen)
+        .opacity(player.isPlaying ? 0.35 : 1)
         .animation(.easeInOut(duration: 0.2), value: player.isPlaying)
-        .allowsHitTesting(!player.isPlaying)
     }
 
     private func activate() {
@@ -292,7 +303,6 @@ struct SingView: View {
                 .padding(18)
             }
             .background(Theme.stageGradient.ignoresSafeArea())
-            .safeAreaPadding(.bottom, 60)
             .navigationTitle("Sing")
             .navigationDestination(for: UUID.self) { tagId in
                 if let tag = store.tags.first(where: { $0.id == tagId }) {
@@ -371,12 +381,19 @@ struct NewTagSheet: View {
 
 // MARK: - Tag detail (the hub: watch + join)
 
+/// What the record flow is asked to do: sing an open part, or replace a take.
+struct RecordRequest: Identifiable {
+    let part: Part
+    let replacing: Take?
+    var id: String { part.id }
+}
+
 struct TagDetailView: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
     let tag: SongTag
     @StateObject private var player = QuartetPlayer()
-    @State private var recordingPart: Part?
+    @State private var recording: RecordRequest?
 
     /// Live tag so a re-key from the pitch pipe reflects immediately.
     private var liveTag: SongTag { store.tags.first(where: { $0.id == tag.id }) ?? tag }
@@ -389,9 +406,17 @@ struct TagDetailView: View {
                 quartet: quartet,
                 player: player,
                 soloable: true,
+                onRerecord: { part in
+                    player.pause()
+                    recording = RecordRequest(part: part, replacing: quartet[part])
+                },
+                onDeleteTake: { part in
+                    player.pause()
+                    if let take = quartet[part] { store.delete(take: take) }
+                },
                 onOpenPart: { part in
                     player.pause()
-                    recordingPart = part
+                    recording = RecordRequest(part: part, replacing: nil)
                 }
             )
             .ignoresSafeArea()
@@ -399,7 +424,7 @@ struct TagDetailView: View {
             VStack {
                 topBar
                 Spacer()
-                if let solo = player.solo { SoloPill(part: solo).padding(.bottom, 24) }
+                if let solo = player.solo { SoloPill(part: solo).padding(.bottom, 16) }
             }
 
             if !quartet.isEmpty {
@@ -412,9 +437,8 @@ struct TagDetailView: View {
                         .frame(width: 64, height: 64)
                         .background(.ultraThinMaterial, in: Circle())
                 }
-                .opacity(player.isPlaying ? 0.0 : 1)
+                .opacity(player.isPlaying ? 0.35 : 1)
                 .animation(.easeInOut(duration: 0.2), value: player.isPlaying)
-                .allowsHitTesting(!player.isPlaying)
             }
         }
         .overlay(alignment: .bottomTrailing) { PitchPipeFab(tag: liveTag) }
@@ -422,8 +446,8 @@ struct TagDetailView: View {
         .onAppear { player.load(takes: quartet, store: store) }
         .onChange(of: store.takes.count) { _, _ in player.load(takes: quartet, store: store) }
         .onDisappear { player.pause() }
-        .fullScreenCover(item: $recordingPart) { part in
-            RecordView(tag: liveTag, part: part)
+        .fullScreenCover(item: $recording) { req in
+            RecordView(tag: liveTag, part: req.part, replacing: req.replacing)
         }
     }
 
@@ -454,18 +478,23 @@ struct TagDetailView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.top, 8)
+        .padding(.top, 6)
         .padding(.bottom, 40)
         .background(Theme.scrim(.top).ignoresSafeArea(edges: .top))
     }
 }
 
-/// Full-screen 2×2 part grid. Filled tiles play video and toggle solo on tap;
-/// open tiles invite joining. Fills whatever container it is placed in.
+/// Full-screen 2×2 part grid. Filled tiles play video and toggle solo on tap
+/// (long-press for re-record/delete when those closures are provided); open
+/// tiles invite joining. Part badges hug the CENTER seam — anchored to the
+/// inner corner of each cell — so they can never fall under the notch, home
+/// indicator, or tab bar no matter how far the grid bleeds.
 struct QuartetGrid: View {
     let quartet: [Part: Take]
     let player: QuartetPlayer
     var soloable: Bool = false
+    var onRerecord: ((Part) -> Void)? = nil
+    var onDeleteTake: ((Part) -> Void)? = nil
     let onOpenPart: (Part) -> Void
 
     private let rows: [[Part]] = [[.tenor, .lead], [.bari, .bass]]
@@ -474,22 +503,20 @@ struct QuartetGrid: View {
         VStack(spacing: 2) {
             ForEach(rows.indices, id: \.self) { r in
                 HStack(spacing: 2) {
-                    ForEach(rows[r]) { part in cell(part) }
+                    ForEach(rows[r]) { part in cell(part, topRow: r == 0) }
                 }
             }
         }
     }
 
     @ViewBuilder
-    private func cell(_ part: Part) -> some View {
+    private func cell(_ part: Part, topRow: Bool) -> some View {
         let soloed = player.solo == part
         let dimmed = player.solo != nil && !soloed
 
-        ZStack(alignment: .bottomLeading) {
-            if let slot = player.slots[part] {
-                PlayerLayerView(player: slot.player)
-                    .contentShape(Rectangle())
-                    .onTapGesture { if soloable { player.solo = soloed ? nil : part } }
+        ZStack(alignment: topRow ? .bottomLeading : .topLeading) {
+            if player.slots[part] != nil {
+                filledCell(part)
             } else if quartet[part] != nil {
                 Rectangle().fill(Theme.card)   // decoding / not loaded
             } else {
@@ -507,6 +534,26 @@ struct QuartetGrid: View {
                     .shadow(color: part.color.opacity(0.8), radius: 6)
                     .allowsHitTesting(false)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func filledCell(_ part: Part) -> some View {
+        let soloed = player.solo == part
+        let base = PlayerLayerView(player: player.slots[part]!.player)
+            .contentShape(Rectangle())
+            .onTapGesture { if soloable { player.solo = soloed ? nil : part } }
+        if let onRerecord, let onDeleteTake {
+            base.contextMenu {
+                Button { onRerecord(part) } label: {
+                    Label("Re-record part", systemImage: "arrow.counterclockwise.circle")
+                }
+                Button(role: .destructive) { onDeleteTake(part) } label: {
+                    Label("Delete take", systemImage: "trash")
+                }
+            }
+        } else {
+            base
         }
     }
 }
@@ -559,6 +606,7 @@ struct RecordView: View {
     @Environment(\.dismiss) private var dismiss
     let tag: SongTag
     let part: Part
+    var replacing: Take? = nil
     @StateObject private var controller = RecordController()
 
     private var guideTakes: [Part: Take] {
@@ -570,7 +618,7 @@ struct RecordView: View {
             Color.black.ignoresSafeArea()
             recordGrid.ignoresSafeArea()
 
-            // top scrim + controls
+            // top controls (safe-area layout; only the scrim reaches the notch)
             VStack {
                 HStack {
                     Button("Close") {
@@ -586,7 +634,7 @@ struct RecordView: View {
                         .frame(minWidth: 56, alignment: .trailing)
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 8)
+                .padding(.top, 6)
                 .padding(.bottom, 36)
                 .background(Theme.scrim(.top).ignoresSafeArea(edges: .top))
                 Spacer()
@@ -611,16 +659,14 @@ struct RecordView: View {
                 .padding(30)
             }
 
-            // bottom scrim + transport
+            // bottom transport (safe-area layout; only the scrim reaches the edge)
             VStack {
                 Spacer()
                 VStack(spacing: 10) {
                     if controller.stage == .ready {
                         RecordButton(recording: false) { controller.begin(store: store) }
                     } else if controller.stage == .countIn || controller.stage == .recording {
-                        RecordButton(recording: true) {
-                            Task { await controller.stop(tagId: tag.id) }
-                        }
+                        RecordButton(recording: true) { stopAndSave() }
                     }
                     Text(guideTakes.isEmpty
                          ? "Tap the pipe for your pitch — four clicks count you in"
@@ -631,7 +677,7 @@ struct RecordView: View {
                         .padding(.horizontal, 24)
                 }
                 .padding(.top, 40)
-                .padding(.bottom, 20)
+                .padding(.bottom, 8)
                 .frame(maxWidth: .infinity)
                 .background(Theme.scrim(.bottom).ignoresSafeArea(edges: .bottom))
             }
@@ -641,28 +687,22 @@ struct RecordView: View {
         }
         .task { await controller.prepare(guideTakes: guideTakes, store: store) }
         .onDisappear { controller.teardown() }
-        .sheet(isPresented: Binding(
-            get: { controller.stage == .review },
-            set: { if !$0 { controller.discardPending() } }
-        )) {
-            if let pending = controller.pendingTake {
-                ReviewView(
-                    tag: tag,
-                    part: part,
-                    pending: pending,
-                    guideTakes: guideTakes,
-                    onSave: { take in
-                        var t = take
-                        t.part = part
-                        store.add(take: t)
-                        controller.confirmSaved() // before dismiss — or the discard handler deletes the saved file
-                        controller.teardown()
-                        dismiss()
-                    },
-                    onRetake: { controller.discardPending() }
-                )
-                .interactiveDismissDisabled()
-            }
+    }
+
+    /// Stop → auto-save, no review step. When replacing, the old take goes
+    /// through store.delete (the only sanctioned way to remove a take's file)
+    /// so quartet(for:) — which picks the FIRST take per part — sees only the
+    /// new one.
+    private func stopAndSave() {
+        Task {
+            await controller.stop(tagId: tag.id)
+            guard var take = controller.pendingTake else { return } // stop failed → stage shows the error
+            take.part = part
+            if let replacing { store.delete(take: replacing) }
+            store.add(take: take)
+            controller.confirmSaved() // BEFORE teardown/dismiss — or the discard path deletes the saved file
+            controller.teardown()
+            dismiss()
         }
     }
 
@@ -677,10 +717,10 @@ struct RecordView: View {
 
     private var recordGrid: some View {
         VStack(spacing: 2) {
-            ForEach([[Part.tenor, .lead], [Part.bari, .bass]], id: \.self) { row in
+            ForEach([0, 1], id: \.self) { r in
                 HStack(spacing: 2) {
-                    ForEach(row) { p in
-                        ZStack(alignment: .bottomLeading) {
+                    ForEach(r == 0 ? [Part.tenor, .lead] : [Part.bari, .bass]) { p in
+                        ZStack(alignment: r == 0 ? .bottomLeading : .topLeading) {
                             if p == part {
                                 CameraPreviewView(session: controller.recorder.session)
                                 PartBadge(part: p, suffix: " · YOU")
@@ -721,94 +761,6 @@ struct RecordButton: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - Review
-
-struct ReviewView: View {
-    @EnvironmentObject var store: Store
-    let tag: SongTag
-    let part: Part
-    let pending: Take
-    let guideTakes: [Part: Take]
-    let onSave: (Take) -> Void
-    let onRetake: () -> Void
-
-    @StateObject private var player = QuartetPlayer()
-    @State private var nudgeMs: Double = 0
-
-    var body: some View {
-        VStack(spacing: 18) {
-            Text("Lock it in").font(.title3.bold()).foregroundStyle(Theme.textPrimary).padding(.top, 18)
-
-            ZStack {
-                QuartetGrid(quartet: reviewTakes, player: player, soloable: true, onOpenPart: { _ in })
-                    .aspectRatio(1, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                Button {
-                    if player.isPlaying { player.pause() } else { Task { await player.play() } }
-                } label: {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title2)
-                        .foregroundStyle(.white)
-                        .frame(width: 58, height: 58)
-                        .background(.ultraThinMaterial, in: Circle())
-                }
-                .opacity(player.isPlaying ? 0.0 : 1)
-                .allowsHitTesting(!player.isPlaying)
-            }
-            .padding(.horizontal)
-
-            if !guideTakes.isEmpty {
-                VStack(spacing: 6) {
-                    HStack {
-                        Text("Timing nudge").font(.caption.bold()).foregroundStyle(Theme.textSecondary)
-                        Spacer()
-                        Text("\(nudgeMs > 0 ? "+" : "")\(Int(nudgeMs)) ms")
-                            .font(.caption.monospacedDigit().bold())
-                            .foregroundStyle(Theme.textPrimary)
-                    }
-                    Slider(value: $nudgeMs, in: -150...150, step: 5) { editing in
-                        if !editing { reloadPlayer() }
-                    }
-                }
-                .padding(.horizontal, 24)
-            }
-
-            Spacer()
-
-            HStack(spacing: 12) {
-                Button("Re-record") { player.pause(); onRetake() }
-                    .buttonStyle(.bordered)
-                Button("Sounds locked ✓") {
-                    player.pause()
-                    var take = pending
-                    take.nudgeSec = nudgeMs / 1000
-                    onSave(take)
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .padding(.bottom, 24)
-        }
-        .background(Theme.stageGradient.ignoresSafeArea())
-        .onAppear { reloadPlayer() }
-        .onDisappear { player.pause() }
-    }
-
-    private var reviewTakes: [Part: Take] {
-        var takes = guideTakes
-        var mine = pending
-        mine.part = part
-        mine.nudgeSec = nudgeMs / 1000
-        takes[part] = mine
-        return takes
-    }
-
-    private func reloadPlayer() {
-        let wasPlaying = player.isPlaying
-        player.load(takes: reviewTakes, store: store)
-        if wasPlaying { Task { await player.play() } }
     }
 }
 

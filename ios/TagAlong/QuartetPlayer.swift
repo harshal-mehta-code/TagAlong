@@ -55,6 +55,13 @@ final class QuartetPlayer: ObservableObject {
         await withTaskGroup(of: Void.self) { group in
             for slot in slots.values {
                 group.addTask { @MainActor in
+                    // AVPlayer.preroll(atRate:) throws NSInvalidArgumentException
+                    // when the player is not readyToPlay — freshly loaded items
+                    // are .unknown, so auto-play right after load() raced it and
+                    // crashed. Wait for readiness; skip preroll if it never comes
+                    // (setRate still anchors the player, it just joins unbuffered).
+                    await Self.waitUntilReady(slot.player)
+                    guard slot.player.status == .readyToPlay else { return }
                     let target = CMTime(seconds: slot.take.startSec + masterSec, preferredTimescale: 600)
                     await slot.player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
                     _ = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
@@ -62,6 +69,15 @@ final class QuartetPlayer: ObservableObject {
                     }
                 }
             }
+        }
+    }
+
+    /// Poll until the player (and its item) leave `.unknown`, or time out.
+    private static func waitUntilReady(_ player: AVPlayer, timeoutSec: Double = 4) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(timeoutSec))
+        while player.status == .unknown || player.currentItem?.status == .unknown {
+            if ContinuousClock.now >= deadline { return }
+            try? await Task.sleep(for: .milliseconds(25))
         }
     }
 
@@ -97,14 +113,20 @@ final class QuartetPlayer: ObservableObject {
     func pause() {
         endTimer?.invalidate()
         endTimer = nil
-        for slot in slots.values { slot.player.pause() }
+        for slot in slots.values {
+            slot.player.cancelPendingPrerolls() // resume any preroll continuations
+            slot.player.pause()
+        }
         isPlaying = false
     }
 
-    /// Current master time according to the first playing slot.
+    /// Current master time: the furthest-advanced slot. All slots are
+    /// hardware-locked, so any still-running player reports true master time;
+    /// shorter takes freeze at their item end (actionAtItemEnd .pause) and
+    /// sampling one of those would plateau below masterEndSec — the end
+    /// watcher would never fire and playback could never loop.
     var masterSec: Double {
-        guard let slot = slots.values.first else { return 0 }
-        return slot.player.currentTime().seconds - slot.take.startSec
+        slots.values.map { $0.player.currentTime().seconds - $0.take.startSec }.max() ?? 0
     }
 
     private func watchForEnd() {
