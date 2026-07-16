@@ -7,10 +7,10 @@ enum Part: String, Codable, CaseIterable, Identifiable {
     var label: String { rawValue.capitalized }
     var color: Color {
         switch self {
-        case .tenor: return Color(red: 0.55, green: 0.65, blue: 0.95)
-        case .lead: return Color(red: 0.85, green: 0.45, blue: 0.45)
-        case .bari: return Color(red: 0.55, green: 0.78, blue: 0.60)
-        case .bass: return Color(red: 0.80, green: 0.65, blue: 0.35)
+        case .tenor: return Color(hex: 0x8FB7E8)
+        case .lead:  return Color(hex: 0xE06A5A)
+        case .bari:  return Color(hex: 0xC79A3D)
+        case .bass:  return Color(hex: 0x5E8C6E)
         }
     }
 }
@@ -85,6 +85,16 @@ final class Store: ObservableObject {
         takes.append(take)
         save()
     }
+
+    /// Replace a tag by id (used to re-key a tag from the pitch pipe).
+    func update(tag: SongTag) {
+        guard let i = tags.firstIndex(where: { $0.id == tag.id }) else { return }
+        tags[i] = tag
+        save()
+    }
+
+    /// Tags with all four parts sung — the watch feed.
+    func isComplete(_ tagId: UUID) -> Bool { quartet(for: tagId).count == Part.allCases.count }
 
     func updateNudge(takeId: UUID, nudgeSec: Double) {
         guard let i = takes.firstIndex(where: { $0.id == takeId }) else { return }
