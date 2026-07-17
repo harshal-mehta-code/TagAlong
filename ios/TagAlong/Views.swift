@@ -400,48 +400,63 @@ struct TagDetailView: View {
     private var quartet: [Part: Take] { store.quartet(for: tag.id) }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            QuartetGrid(
-                quartet: quartet,
-                player: player,
-                soloable: true,
-                onRerecord: { part in
-                    player.pause()
-                    recording = RecordRequest(part: part, replacing: quartet[part])
-                },
-                onDeleteTake: { part in
-                    player.pause()
-                    if let take = quartet[part] { store.delete(take: take) }
-                },
-                onOpenPart: { part in
-                    player.pause()
-                    recording = RecordRequest(part: part, replacing: nil)
-                }
-            )
-            .ignoresSafeArea()
+        // One coherent rule (see QuartetGrid doc): the video bleeds edge-to-edge
+        // via .ignoresSafeArea(); every control lives in a chrome layer padded by
+        // the real safe-area insets — which, on this pushed screen, INCLUDE the
+        // custom tab bar's height — so nothing lands under the bar/home indicator.
+        GeometryReader { geo in
+            let insets = geo.safeAreaInsets
+            ZStack {
+                Color.black.ignoresSafeArea()
+                QuartetGrid(
+                    quartet: quartet,
+                    player: player,
+                    soloable: true,
+                    onRerecord: { part in
+                        player.pause()
+                        recording = RecordRequest(part: part, replacing: quartet[part])
+                    },
+                    onDeleteTake: { part in
+                        player.pause()
+                        if let take = quartet[part] { store.delete(take: take) }
+                    },
+                    onOpenPart: { part in
+                        player.pause()
+                        recording = RecordRequest(part: part, replacing: nil)
+                    }
+                )
+                .ignoresSafeArea()
 
-            VStack {
-                topBar
-                Spacer()
-                if let solo = player.solo { SoloPill(part: solo).padding(.bottom, 16) }
-            }
-
-            if !quartet.isEmpty {
-                Button {
-                    if player.isPlaying { player.pause() } else { Task { await player.play() } }
-                } label: {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 26))
-                        .foregroundStyle(.white)
-                        .frame(width: 64, height: 64)
-                        .background(.ultraThinMaterial, in: Circle())
+                VStack {
+                    topBar(insets: insets)
+                    Spacer()
+                    if let solo = player.solo { SoloPill(part: solo) }
                 }
-                .opacity(player.isPlaying ? 0.35 : 1)
-                .animation(.easeInOut(duration: 0.2), value: player.isPlaying)
+                .padding(.bottom, insets.bottom + 16)
+
+                if !quartet.isEmpty {
+                    Button {
+                        if player.isPlaying { player.pause() } else { Task { await player.play() } }
+                    } label: {
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 26))
+                            .foregroundStyle(.white)
+                            .frame(width: 64, height: 64)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .opacity(player.isPlaying ? 0.35 : 1)
+                    .animation(.easeInOut(duration: 0.2), value: player.isPlaying)
+                }
+
+                // Pitch pipe floats fully above the tab bar (its own 20pt inset
+                // sits on top of the safe-area bottom inset → clear of the bar).
+                VStack {
+                    Spacer()
+                    HStack { Spacer(); PitchPipeFab(tag: liveTag) }
+                }
+                .padding(.bottom, insets.bottom)
             }
         }
-        .overlay(alignment: .bottomTrailing) { PitchPipeFab(tag: liveTag) }
         .toolbar(.hidden, for: .navigationBar)
         .onAppear { player.load(takes: quartet, store: store) }
         .onChange(of: store.takes.count) { _, _ in player.load(takes: quartet, store: store) }
@@ -451,7 +466,7 @@ struct TagDetailView: View {
         }
     }
 
-    private var topBar: some View {
+    private func topBar(insets: EdgeInsets) -> some View {
         HStack(alignment: .top) {
             Button { player.pause(); dismiss() } label: {
                 Image(systemName: "chevron.left")
@@ -478,9 +493,9 @@ struct TagDetailView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.top, 6)
+        .padding(.top, insets.top + 6)
         .padding(.bottom, 40)
-        .background(Theme.scrim(.top).ignoresSafeArea(edges: .top))
+        .background(Theme.scrim(.top).padding(.top, -insets.top))
     }
 }
 
@@ -614,76 +629,89 @@ struct RecordView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            recordGrid.ignoresSafeArea()
+        // Same rule as the rest of the app: camera/guides bleed edge-to-edge;
+        // controls sit in chrome padded by the real insets. No tab bar here
+        // (this is a fullScreenCover), so insets.bottom is the home indicator —
+        // the record button and pitch pipe both clear it.
+        GeometryReader { geo in
+            let insets = geo.safeAreaInsets
+            ZStack {
+                Color.black.ignoresSafeArea()
+                recordGrid.ignoresSafeArea()
 
-            // top controls (safe-area layout; only the scrim reaches the notch)
-            VStack {
-                HStack {
-                    Button("Close") {
-                        Task { await controller.stop(tagId: nil); controller.teardown(); dismiss() }
-                    }
-                    .foregroundStyle(.white)
-                    Spacer()
-                    Text("Sing the \(part.label)").font(.subheadline.bold()).foregroundStyle(.white)
-                    Spacer()
-                    Text(statusText)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(Theme.textSecondary)
-                        .frame(minWidth: 56, alignment: .trailing)
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 6)
-                .padding(.bottom, 36)
-                .background(Theme.scrim(.top).ignoresSafeArea(edges: .top))
-                Spacer()
-            }
-
-            if case .countIn = controller.stage {
-                Text("\(controller.countdown)")
-                    .font(.system(size: 110, weight: .semibold, design: .serif))
-                    .foregroundStyle(.white)
-                    .shadow(radius: 14)
-            }
-            if case .failed(let message) = controller.stage {
-                VStack(spacing: 14) {
-                    Text(message)
-                        .multilineTextAlignment(.center)
+                VStack {
+                    HStack {
+                        Button("Close") {
+                            Task { await controller.stop(tagId: nil); controller.teardown(); dismiss() }
+                        }
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 30)
-                    Button("Close") { dismiss() }.buttonStyle(.borderedProminent)
-                }
-                .padding(24)
-                .background(Theme.card.opacity(0.95), in: RoundedRectangle(cornerRadius: 18))
-                .padding(30)
-            }
-
-            // bottom transport (safe-area layout; only the scrim reaches the edge)
-            VStack {
-                Spacer()
-                VStack(spacing: 10) {
-                    if controller.stage == .ready {
-                        RecordButton(recording: false) { controller.begin(store: store) }
-                    } else if controller.stage == .countIn || controller.stage == .recording {
-                        RecordButton(recording: true) { stopAndSave() }
+                        Spacer()
+                        Text("Sing the \(part.label)").font(.subheadline.bold()).foregroundStyle(.white)
+                        Spacer()
+                        Text(statusText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(Theme.textSecondary)
+                            .frame(minWidth: 56, alignment: .trailing)
                     }
-                    Text(guideTakes.isEmpty
-                         ? "Tap the pipe for your pitch — four clicks count you in"
-                         : "🎧 The other parts sing in your ears — four clicks, then join them")
-                        .font(.caption)
-                        .foregroundStyle(Theme.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
+                    .padding(.horizontal, 16)
+                    .padding(.top, insets.top + 6)
+                    .padding(.bottom, 36)
+                    .background(Theme.scrim(.top).padding(.top, -insets.top))
+                    Spacer()
                 }
-                .padding(.top, 40)
-                .padding(.bottom, 8)
-                .frame(maxWidth: .infinity)
-                .background(Theme.scrim(.bottom).ignoresSafeArea(edges: .bottom))
+
+                if case .countIn = controller.stage {
+                    Text("\(controller.countdown)")
+                        .font(.system(size: 110, weight: .semibold, design: .serif))
+                        .foregroundStyle(.white)
+                        .shadow(radius: 14)
+                }
+                if case .failed(let message) = controller.stage {
+                    VStack(spacing: 14) {
+                        Text(message)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 30)
+                        Button("Close") { dismiss() }.buttonStyle(.borderedProminent)
+                    }
+                    .padding(24)
+                    .background(Theme.card.opacity(0.95), in: RoundedRectangle(cornerRadius: 18))
+                    .padding(30)
+                }
+
+                VStack {
+                    Spacer()
+                    VStack(spacing: 10) {
+                        if controller.stage == .ready {
+                            RecordButton(recording: false) { controller.begin(store: store) }
+                        } else if controller.stage == .countIn || controller.stage == .recording {
+                            RecordButton(recording: true) { stopAndSave() }
+                        }
+                        Text(guideTakes.isEmpty
+                             ? "Tap the pipe for your pitch — four clicks count you in"
+                             : "🎧 The other parts sing in your ears — four clicks, then join them")
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                    }
+                    .padding(.top, 40)
+                    .padding(.bottom, 12)
+                    .frame(maxWidth: .infinity)
+                    .background(Theme.scrim(.bottom).padding(.bottom, -insets.bottom))
+                }
+                .padding(.bottom, insets.bottom)
+
+                // Pitch pipe lifted above the record-button cluster, clear of the
+                // home indicator and fully tappable beside the centered button.
+                if controller.stage == .ready {
+                    VStack {
+                        Spacer()
+                        HStack { Spacer(); PitchPipeFab(tag: tag) }
+                    }
+                    .padding(.bottom, insets.bottom + 88)
+                }
             }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if controller.stage == .ready { PitchPipeFab(tag: tag).padding(.bottom, 90) }
         }
         .task { await controller.prepare(guideTakes: guideTakes, store: store) }
         .onDisappear { controller.teardown() }
