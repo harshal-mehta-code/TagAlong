@@ -141,6 +141,7 @@ struct FeedPage: View {
 
     @StateObject private var player = QuartetPlayer()
     @State private var userPaused = false
+    @State private var exportTrigger = false
 
     private var quartet: [Part: Take] { store.quartet(for: tag.id) }
 
@@ -172,6 +173,10 @@ struct FeedPage: View {
                 Task { await player.play() }
             }
         }
+        .performanceExport(isActive: $exportTrigger, tag: tag, quartet: quartet, store: store) {
+            userPaused = true
+            player.pause()
+        }
     }
 
     private var topBar: some View {
@@ -184,6 +189,7 @@ struct FeedPage: View {
                 KeyChip(key: tag.key)
             }
             Spacer()
+            ShareChromeButton { exportTrigger = true }
             Menu {
                 Button(role: .destructive) { store.delete(tag: tag) } label: {
                     Label("Delete performance", systemImage: "trash")
@@ -394,6 +400,7 @@ struct TagDetailView: View {
     let tag: SongTag
     @StateObject private var player = QuartetPlayer()
     @State private var recording: RecordRequest?
+    @State private var exportTrigger = false
 
     /// Live tag so a re-key from the pitch pipe reflects immediately.
     private var liveTag: SongTag { store.tags.first(where: { $0.id == tag.id }) ?? tag }
@@ -464,6 +471,9 @@ struct TagDetailView: View {
         .fullScreenCover(item: $recording) { req in
             RecordView(tag: liveTag, part: req.part, replacing: req.replacing)
         }
+        .performanceExport(isActive: $exportTrigger, tag: liveTag, quartet: quartet, store: store) {
+            player.pause()
+        }
     }
 
     private func topBar(insets: EdgeInsets) -> some View {
@@ -481,6 +491,9 @@ struct TagDetailView: View {
                 KeyChip(key: liveTag.key)
             }
             Spacer()
+            if store.isComplete(tag.id) {
+                ShareChromeButton { exportTrigger = true }
+            }
             Menu {
                 Button(role: .destructive) {
                     store.delete(tag: tag); dismiss()
