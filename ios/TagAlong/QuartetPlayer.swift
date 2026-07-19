@@ -24,9 +24,16 @@ final class QuartetPlayer: ObservableObject {
     nonisolated static var playStartSec: Double { AudioClock.countInSec - 0.15 }
 
     func load(takes: [Part: Take], store: Store) {
+        load(takes: takes) { store.mediaURL(for: $0) }
+    }
+
+    /// Media-source-agnostic load: the library plays from Documents via the
+    /// Store, the Watch feed plays straight from the CloudCache (docs/10 §A —
+    /// watching never touches the Store).
+    func load(takes: [Part: Take], mediaURL: (Take) -> URL) {
         unload()
         for (part, take) in takes {
-            let item = AVPlayerItem(url: store.mediaURL(for: take))
+            let item = AVPlayerItem(url: mediaURL(take))
             let player = AVPlayer(playerItem: item)
             player.automaticallyWaitsToMinimizeStalling = false // required for setRate(atHostTime:)
             player.actionAtItemEnd = .pause // shorter takes freeze; the master keeps going

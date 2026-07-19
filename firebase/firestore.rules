@@ -1,31 +1,70 @@
 rules_version = '2';
 
-// TagAlong community rules. NOT YET DEPLOYED — the console project is likely
-// still in test mode. Deploy with the Firebase CLI when ready.
+// TagAlong community rules, v2 (docs/10 §A ownership model + §C social layer).
+// NOT YET DEPLOYED — deploy with the Firebase CLI:
+//   firebase deploy --only firestore:rules,storage
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // A tag: readable by any signed-in user. Anyone signed in may create it or
-    // update its completion metadata.
-    //
-    // TODO(security): this is intentionally loose for the first multiplayer
-    // milestone — ANY authed user can overwrite ANY tag doc (title/key/parts/
-    // isComplete), because completeness is recomputed client-side. Tighten once
-    // a Cloud Function owns completion (server-authoritative parts/isComplete)
-    // and creatorUid is pinned on create.
+    // Public profile (docs/10 §F1–F2): displayName + voice part. Readable by
+    // any signed-in user (credits, comments); writable only by its owner.
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    // Reports (docs/10 §F5): write-only drop box, read from the console only.
+    match /reports/{reportId} {
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if false;
+    }
+
+    // A tag belongs to its creator (docs/10 §A): creatorUid is pinned at
+    // create, and only the creator may delete the tag everywhere. Updates stay
+    // open to any signed-in user because completion metadata (parts/
+    // isComplete) and ringCount are recomputed/incremented client-side.
+    // TODO(security): move completion + counters to a Cloud Function, then
+    // lock update to the creator.
     match /tags/{tagId} {
       allow read: if request.auth != null;
-      allow create, update: if request.auth != null;
-      allow delete: if false;
+      allow create: if request.auth != null
+                    && request.resource.data.creatorUid == request.auth.uid;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null
+                    && resource.data.creatorUid == request.auth.uid;
 
-      // A take: readable by any signed-in user; writable only by its owner.
+      // A take belongs to its owner (docs/10 §A). Owners remove their own
+      // voice; the tag's creator may clear takes while deleting the tag
+      // everywhere.
       match /takes/{takeId} {
         allow read: if request.auth != null;
         allow create: if request.auth != null
                       && request.resource.data.ownerUid == request.auth.uid;
         allow update: if request.auth != null
                       && resource.data.ownerUid == request.auth.uid;
-        allow delete: if false;
+        allow delete: if request.auth != null
+                      && (resource.data.ownerUid == request.auth.uid
+                          || get(/databases/$(database)/documents/tags/$(tagId)).data.creatorUid == request.auth.uid);
+      }
+
+      // Ring it (docs/10 §C): one doc per user, keyed by uid.
+      match /rings/{userId} {
+        allow read: if request.auth != null;
+        allow create, delete: if request.auth != null && request.auth.uid == userId;
+        allow update: if false;
+      }
+
+      // Afterglow (docs/10 §C): append-only, signed, 280 chars.
+      match /comments/{commentId} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null
+                      && request.resource.data.uid == request.auth.uid
+                      && request.resource.data.text is string
+                      && request.resource.data.text.size() > 0
+                      && request.resource.data.text.size() <= 280;
+        allow update, delete: if false;
       }
     }
   }

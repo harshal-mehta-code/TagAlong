@@ -17,7 +17,8 @@ final class RecordController: ObservableObject {
     let recorder = TakeRecorder()
     let guides = QuartetPlayer()
 
-    static let maxSingSec: Double = 60
+    /// Take length cap (docs/10 §F6) — keeps uploads and Blaze bills sane.
+    static let maxSingSec: Double = 90
 
     private var t0HeardHost: UInt64 = 0
     private var fileURL: URL?

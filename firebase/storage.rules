@@ -1,20 +1,23 @@
 rules_version = '2';
 
-// TagAlong take media. NOT YET DEPLOYED — the console bucket is likely still in
-// test mode. Deploy with the Firebase CLI when ready.
+// TagAlong take media, v2. NOT YET DEPLOYED — deploy with the Firebase CLI:
+//   firebase deploy --only firestore:rules,storage
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // Take movies live flat under takes/{takeUUID}.mov. Any signed-in user may
-    // read (feed playback + join downloads); writes are limited to that path.
+    // Take media lives flat under takes/{takeUUID}.{mov|mp4} (.mp4 = the 720p
+    // transcode path, docs/10 §F6). Any signed-in user may read (feed playback
+    // + cache downloads); writes — including deletes for "remove my voice" and
+    // "delete tag for everyone" — are limited to that path.
     //
-    // TODO(security): does not verify the writer owns the matching Firestore
-    // take doc (no cross-service check in Storage rules). Acceptable for the
-    // first milestone; revisit alongside the Firestore rules TODO.
+    // TODO(security): Storage rules can't check the matching Firestore take
+    // doc's ownerUid (no cross-service get here), so any signed-in user can
+    // technically delete any take file. Acceptable for the seeded beta;
+    // revisit alongside the Cloud Function move in firestore.rules.
     match /takes/{takeFile} {
       allow read: if request.auth != null;
       allow write: if request.auth != null
-                   && takeFile.matches('.*[.]mov');
+                   && takeFile.matches('.*[.](mov|mp4)');
     }
 
     match /{allOther=**} {

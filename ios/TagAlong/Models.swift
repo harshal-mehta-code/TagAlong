@@ -31,7 +31,13 @@ enum PitchKey: String, Codable, CaseIterable, Identifiable {
     var frequency: Double { 440 * pow(2, Double(semitonesFromA4) / 12) }
 }
 
-struct SongTag: Codable, Identifiable {
+/// Who can discover a published tag (docs/10 §F8).
+enum TagVisibility: String, Codable {
+    case publicFeed = "public" // in the community feed
+    case unlisted              // invite code only
+}
+
+struct SongTag: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var title: String
     var key: PitchKey
@@ -39,9 +45,14 @@ struct SongTag: Codable, Identifiable {
     // Cloud provenance (optional → old JSON keeps decoding; nil = local-only).
     var creatorUid: String? = nil
     var publishedAt: Date? = nil
+    // v2 (docs/10): joiner context + invitations. All optional → old JSON decodes.
+    var lyrics: String? = nil
+    var notes: String? = nil              // e.g. "Polecat #4"
+    var visibility: TagVisibility? = nil  // nil = public (pre-v2 tags)
+    var inviteCode: String? = nil         // stamped at publish
 }
 
-struct Take: Codable, Identifiable {
+struct Take: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var tagId: UUID
     var part: Part
@@ -62,11 +73,23 @@ struct Take: Codable, Identifiable {
     var startSec: Double { t0OffsetSec + nudgeSec }
 }
 
+/// My relationship to a tag — drives the role-aware delete menu (docs/10 §A).
+enum TagRole { case creator, contributor, viewer }
+
 /// Local-first persistence: JSON metadata + movie files in Documents.
+/// This is the LIBRARY (docs/10 §A): tags I created + tags I tagged along on.
+/// Anything merely watched lives in the feed cache (CloudCache), never here.
 @MainActor
 final class Store: ObservableObject {
     @Published private(set) var tags: [SongTag] = []
     @Published private(set) var takes: [Take] = []
+    /// Cast selection (docs/10 §F4): tagId → part rawValue → takeId. When a
+    /// part has multiple takes, this picks which one MY quartet plays.
+    @Published private(set) var cast: [String: [String: String]] = [:]
+
+    /// Signed-in uid, set by CloudStore after auth. Lets the Store tell my
+    /// takes from downloaded ones; not persisted (auth is the source of truth).
+    var myUid: String?
 
     private let dir: URL
     private var metaURL: URL { dir.appendingPathComponent("tagalong.json") }
@@ -74,6 +97,7 @@ final class Store: ObservableObject {
     struct Snapshot: Codable {
         var tags: [SongTag]
         var takes: [Take]
+        var cast: [String: [String: String]]?
     }
 
     init() {
@@ -122,22 +146,50 @@ final class Store: ObservableObject {
     /// Tags with all four parts sung — the watch feed.
     func isComplete(_ tagId: UUID) -> Bool { quartet(for: tagId).count == Part.allCases.count }
 
+    /// A take is mine if I recorded it: uploaded under my uid, or recorded
+    /// locally before any cloud identity existed (ownerUid nil).
+    func isMine(_ take: Take) -> Bool { take.ownerUid == nil || take.ownerUid == myUid }
+
+    /// Role-aware ownership (docs/10 §A): creator > contributor > viewer.
+    func role(for tag: SongTag) -> TagRole {
+        if tag.creatorUid == nil || tag.creatorUid == myUid { return .creator }
+        if takes(for: tag.id).contains(where: { isMine($0) }) { return .contributor }
+        return .viewer
+    }
+
     func updateNudge(takeId: UUID, nudgeSec: Double) {
         guard let i = takes.firstIndex(where: { $0.id == takeId }) else { return }
         takes[i].nudgeSec = nudgeSec
         save()
     }
 
-    func delete(take: Take) {
-        takes.removeAll { $0.id == take.id }
-        try? FileManager.default.removeItem(at: mediaURL(for: take))
+    /// Pin which take MY quartet plays for a part (docs/10 §F4 — swap-in,
+    /// don't stomp). nil clears back to the default preference order.
+    func setCast(tagId: UUID, part: Part, takeId: UUID?) {
+        var forTag = cast[tagId.uuidString] ?? [:]
+        forTag[part.rawValue] = takeId?.uuidString
+        cast[tagId.uuidString] = forTag.isEmpty ? nil : forTag
         save()
     }
 
+    func delete(take: Take) {
+        takes.removeAll { $0.id == take.id }
+        try? FileManager.default.removeItem(at: mediaURL(for: take))
+        // Drop any cast entry pointing at the deleted take.
+        if var forTag = cast[take.tagId.uuidString] {
+            forTag = forTag.filter { $0.value != take.id.uuidString }
+            cast[take.tagId.uuidString] = forTag.isEmpty ? nil : forTag
+        }
+        save()
+    }
+
+    /// Remove a tag from THIS phone only (library + media). Cloud copies are
+    /// untouched — role-aware cloud deletes live in CloudStore.
     func delete(tag: SongTag) {
         for t in takes(for: tag.id) { try? FileManager.default.removeItem(at: mediaURL(for: t)) }
         takes.removeAll { $0.tagId == tag.id }
         tags.removeAll { $0.id == tag.id }
+        cast[tag.id.uuidString] = nil
         save()
     }
 
@@ -159,10 +211,12 @@ final class Store: ObservableObject {
         save()
     }
 
-    /// Record that a tag was published to the community (and who created it).
-    func markPublished(tagId: UUID, creatorUid: String) {
+    /// Record that a tag was published to the community (who created it, and
+    /// the invite code minted for it — docs/10 §E).
+    func markPublished(tagId: UUID, creatorUid: String, inviteCode: String?) {
         guard let i = tags.firstIndex(where: { $0.id == tagId }) else { return }
         if tags[i].creatorUid == nil { tags[i].creatorUid = creatorUid }
+        if tags[i].inviteCode == nil { tags[i].inviteCode = inviteCode }
         tags[i].publishedAt = Date()
         save()
     }
@@ -175,11 +229,23 @@ final class Store: ObservableObject {
         save()
     }
 
-    /// First take per part, in part order — the default quartet combination.
+    /// The quartet MY device plays, one take per part. Preference per part
+    /// (docs/10 §F4): explicit cast selection → my own take (newest) → the
+    /// first take ever recorded for the part (the pre-v2 default).
     func quartet(for tagId: UUID) -> [Part: Take] {
+        let all = takes(for: tagId).sorted { $0.createdAt < $1.createdAt }
         var result: [Part: Take] = [:]
-        for take in takes(for: tagId).sorted(by: { $0.createdAt < $1.createdAt }) {
-            if result[take.part] == nil { result[take.part] = take }
+        for part in Part.allCases {
+            let candidates = all.filter { $0.part == part }
+            guard !candidates.isEmpty else { continue }
+            if let castId = cast[tagId.uuidString]?[part.rawValue],
+               let chosen = candidates.first(where: { $0.id.uuidString == castId }) {
+                result[part] = chosen
+            } else if let mine = candidates.last(where: { isMine($0) }) {
+                result[part] = mine
+            } else {
+                result[part] = candidates.first
+            }
         }
         return result
     }
@@ -189,10 +255,11 @@ final class Store: ObservableObject {
               let snap = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
         tags = snap.tags
         takes = snap.takes
+        cast = snap.cast ?? [:]
     }
 
     private func save() {
-        let snap = Snapshot(tags: tags, takes: takes)
+        let snap = Snapshot(tags: tags, takes: takes, cast: cast)
         if let data = try? JSONEncoder().encode(snap) {
             try? data.write(to: metaURL, options: .atomic)
         }
