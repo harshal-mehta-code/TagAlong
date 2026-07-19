@@ -12,6 +12,7 @@ struct TagAlongApp: App {
         // Must run before any CloudStore (Auth/Firestore) is created. @StateObject
         // defers CloudStore()'s autoclosure until first body eval, i.e. after this.
         FirebaseApp.configure()
+        Haptics.prepare()
     }
 
     var body: some Scene {
@@ -206,20 +207,38 @@ struct CloudFeedPage: View {
 }
 
 struct FeedEmptyState: View {
+    @State private var breathe = false
+
     var body: some View {
-        VStack(spacing: 14) {
-            Text("🎭").font(.system(size: 60))
-            Text("No performances yet").font(.title2.bold()).foregroundStyle(Theme.textPrimary)
-            Text("When all four parts of a tag are sung,\nthe quartet takes the stage here.")
+        VStack(spacing: 16) {
+            // Brass music-note motif, softly breathing.
+            HStack(spacing: 14) {
+                Image(systemName: "music.note").font(.system(size: 26))
+                    .foregroundStyle(Theme.brass.opacity(0.7))
+                Image(systemName: "music.note").font(.system(size: 44))
+                    .foregroundStyle(Theme.brassSoft)
+                Image(systemName: "music.note").font(.system(size: 26))
+                    .foregroundStyle(Theme.brass.opacity(0.7))
+            }
+            .shadow(color: Theme.brass.opacity(0.4), radius: 10)
+            .scaleEffect(breathe ? 1.06 : 0.96)
+            .animation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true), value: breathe)
+            .padding(.bottom, 6)
+
+            Text("The stage is empty")
+                .font(.system(.title2, design: .serif).weight(.semibold))
+                .foregroundStyle(Theme.textPrimary)
+            Text("Start a tag and sing the first part —\nwhen all four voices join, the quartet\ntakes the stage right here.")
                 .multilineTextAlignment(.center)
                 .font(.subheadline)
                 .foregroundStyle(Theme.textSecondary)
-            Text("Head to the Sing tab to start one →")
+            Text("Head to the Sing tab to begin →")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(Theme.brass)
                 .padding(.top, 4)
         }
         .padding(40)
+        .onAppear { breathe = true }
     }
 }
 
@@ -384,6 +403,7 @@ struct SingView: View {
                             in: RoundedRectangle(cornerRadius: 16))
                         .shadow(color: Theme.brass.opacity(0.35), radius: 10, y: 4)
                     }
+                    .buttonStyle(PressScale())
 
                     if openTags.isEmpty {
                         VStack(spacing: 10) {
@@ -405,8 +425,13 @@ struct SingView: View {
                         }
                     }
 
-                    if !communityTags.isEmpty {
-                        sectionHeader("From the community")
+                    sectionHeader("From the community")
+                    if communityTags.isEmpty {
+                        Text("No open invitations right now — publish a tag and it’ll wait here for someone to tag along.")
+                            .font(.footnote)
+                            .foregroundStyle(Theme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
                         ForEach(communityTags) { ct in
                             Button { join(ct) } label: {
                                 CommunityTagCard(cloudTag: ct, joining: joiningId == ct.id)
@@ -462,6 +487,7 @@ struct SingView: View {
 struct CommunityTagCard: View {
     let cloudTag: CloudTag
     let joining: Bool
+    @State private var pulse = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -482,6 +508,7 @@ struct CommunityTagCard: View {
                             .overlay(Circle().stroke(part.color.opacity(filled ? 0 : 0.7),
                                                      style: StrokeStyle(lineWidth: 1.5, dash: [2.5])))
                             .frame(width: 9, height: 9)
+                            .opacity(filled ? 1 : (pulse ? 1 : 0.4))
                         Text(part.label)
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(filled ? Theme.textPrimary : Theme.textSecondary)
@@ -489,16 +516,19 @@ struct CommunityTagCard: View {
                     if part != Part.allCases.last { Spacer() }
                 }
             }
+            .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true), value: pulse)
         }
         .padding(16)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(Theme.line, lineWidth: 1))
+        .onAppear { pulse = true }
     }
 }
 
 struct OpenTagCard: View {
     @EnvironmentObject var store: Store
     let tag: SongTag
+    @State private var pulse = false
 
     private var quartet: [Part: Take] { store.quartet(for: tag.id) }
 
@@ -518,6 +548,8 @@ struct OpenTagCard: View {
                             .overlay(Circle().stroke(part.color.opacity(filled ? 0 : 0.7),
                                                      style: StrokeStyle(lineWidth: 1.5, dash: [2.5])))
                             .frame(width: 9, height: 9)
+                            // open slots breathe to read as "still waiting"
+                            .opacity(filled ? 1 : (pulse ? 1 : 0.4))
                         Text(part.label)
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(filled ? Theme.textPrimary : Theme.textSecondary)
@@ -525,10 +557,12 @@ struct OpenTagCard: View {
                     if part != Part.allCases.last { Spacer() }
                 }
             }
+            .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true), value: pulse)
         }
         .padding(16)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(Theme.line, lineWidth: 1))
+        .onAppear { pulse = true }
     }
 }
 
@@ -578,6 +612,10 @@ struct TagDetailView: View {
     @StateObject private var player = QuartetPlayer()
     @State private var recording: RecordRequest?
     @State private var exportTrigger = false
+    // Completion celebration: fires once on the false→true flip of isComplete
+    // observed while this view is alive (i.e. the fourth part just landed).
+    @State private var celebrating = false
+    @State private var wasComplete = false
 
     /// Live tag so a re-key from the pitch pipe reflects immediately.
     private var liveTag: SongTag { store.tags.first(where: { $0.id == tag.id }) ?? tag }
@@ -639,11 +677,28 @@ struct TagDetailView: View {
                     HStack { Spacer(); PitchPipeFab(tag: liveTag) }
                 }
                 .padding(.bottom, insets.bottom)
+
+                if celebrating {
+                    CelebrationView {
+                        celebrating = false
+                        player.load(takes: quartet, store: store)
+                        Task { await player.play() }
+                    }
+                    .transition(.opacity)
+                }
             }
         }
         .toolbar(.hidden, for: .navigationBar)
-        .onAppear { player.load(takes: quartet, store: store) }
-        .onChange(of: store.takes.count) { _, _ in player.load(takes: quartet, store: store) }
+        .onAppear {
+            player.load(takes: quartet, store: store)
+            wasComplete = store.isComplete(tag.id)
+        }
+        .onChange(of: store.takes.count) { _, _ in
+            player.load(takes: quartet, store: store)
+            let nowComplete = store.isComplete(tag.id)
+            if nowComplete && !wasComplete { celebrating = true }
+            wasComplete = nowComplete
+        }
         .onDisappear { player.pause() }
         .fullScreenCover(item: $recording) { req in
             RecordView(tag: liveTag, part: req.part, replacing: req.replacing)
@@ -743,6 +798,8 @@ struct QuartetGrid: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        // a filled tile eases in with a soft spring as its part lands
+        .animation(.spring(response: 0.5, dampingFraction: 0.72), value: player.slots[part] != nil)
         .overlay {
             if soloed {
                 Rectangle().stroke(part.color, lineWidth: 3)
@@ -757,7 +814,7 @@ struct QuartetGrid: View {
         let soloed = player.solo == part
         let base = PlayerLayerView(player: player.slots[part]!.player)
             .contentShape(Rectangle())
-            .onTapGesture { if soloable { player.solo = soloed ? nil : part } }
+            .onTapGesture { if soloable { Haptics.select(); player.solo = soloed ? nil : part } }
         if let onRerecord, let onDeleteTake {
             base.contextMenu {
                 Button { onRerecord(part) } label: {
@@ -916,6 +973,11 @@ struct RecordView: View {
         }
         .task { await controller.prepare(guideTakes: guideTakes, store: store) }
         .onDisappear { controller.teardown() }
+        // Tick a light impact with each count-in click the UI shows (observing
+        // the controller's published stage — never driving the audio clock).
+        .onChange(of: controller.countdown) { _, _ in
+            if case .countIn = controller.stage { Haptics.light() }
+        }
     }
 
     /// Stop → auto-save, no review step. When replacing, the old take goes
@@ -929,6 +991,7 @@ struct RecordView: View {
             take.part = part
             if let replacing { store.delete(take: replacing) }
             store.add(take: take)
+            Haptics.success()
             controller.confirmSaved() // BEFORE teardown/dismiss — or the discard path deletes the saved file
             controller.teardown()
             publishToCloud(take)
@@ -999,7 +1062,10 @@ struct RecordButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            Haptics.medium()
+            action()
+        } label: {
             ZStack {
                 Circle().stroke(.white.opacity(0.85), lineWidth: 4).frame(width: 74, height: 74)
                 if recording {
@@ -1008,7 +1074,9 @@ struct RecordButton: View {
                     Circle().fill(Theme.record).frame(width: 58, height: 58)
                 }
             }
+            .animation(.spring(response: 0.35, dampingFraction: 0.6), value: recording)
         }
+        .buttonStyle(PressScale())
     }
 }
 
@@ -1083,6 +1151,7 @@ struct PitchPipeFab: View {
     /// Play the note and, since the pipe is always opened in a tag's context,
     /// re-key the tag immediately.
     private func select(_ k: PitchKey) {
+        Haptics.select()
         key = k
         AudioClock.shared.playPitch(k)
         var t = store.tags.first(where: { $0.id == tag.id }) ?? tag
