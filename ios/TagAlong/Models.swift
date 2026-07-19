@@ -36,6 +36,9 @@ struct SongTag: Codable, Identifiable {
     var title: String
     var key: PitchKey
     var createdAt: Date = Date()
+    // Cloud provenance (optional → old JSON keeps decoding; nil = local-only).
+    var creatorUid: String? = nil
+    var publishedAt: Date? = nil
 }
 
 struct Take: Codable, Identifiable {
@@ -51,6 +54,10 @@ struct Take: Codable, Identifiable {
     var nudgeSec: Double = 0
     var durationSec: Double
     var createdAt: Date = Date()
+    // Cloud provenance (optional → old JSON keeps decoding).
+    // ownerUid nil = mine, recorded before cloud existed. uploadedAt nil = not yet in Storage.
+    var ownerUid: String? = nil
+    var uploadedAt: Date? = nil
 
     var startSec: Double { t0OffsetSec + nudgeSec }
 }
@@ -135,6 +142,38 @@ final class Store: ObservableObject {
     }
 
     func takes(for tagId: UUID) -> [Take] { takes.filter { $0.tagId == tagId } }
+
+    // MARK: - Cloud sync helpers
+
+    /// Insert a tag imported from the cloud, skipping if its id is already local.
+    func upsert(tag: SongTag) {
+        guard !tags.contains(where: { $0.id == tag.id }) else { return }
+        tags.insert(tag, at: 0)
+        save()
+    }
+
+    /// Insert a take imported from the cloud, skipping if its id is already local.
+    func upsert(take: Take) {
+        guard !takes.contains(where: { $0.id == take.id }) else { return }
+        takes.append(take)
+        save()
+    }
+
+    /// Record that a tag was published to the community (and who created it).
+    func markPublished(tagId: UUID, creatorUid: String) {
+        guard let i = tags.firstIndex(where: { $0.id == tagId }) else { return }
+        if tags[i].creatorUid == nil { tags[i].creatorUid = creatorUid }
+        tags[i].publishedAt = Date()
+        save()
+    }
+
+    /// Record that a take's media was uploaded to Storage (and who owns it).
+    func markUploaded(takeId: UUID, ownerUid: String) {
+        guard let i = takes.firstIndex(where: { $0.id == takeId }) else { return }
+        if takes[i].ownerUid == nil { takes[i].ownerUid = ownerUid }
+        takes[i].uploadedAt = Date()
+        save()
+    }
 
     /// First take per part, in part order — the default quartet combination.
     func quartet(for tagId: UUID) -> [Part: Take] {

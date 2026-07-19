@@ -1,3 +1,4 @@
+import FirebaseCore
 import SwiftUI
 
 // MARK: - App
@@ -5,11 +6,19 @@ import SwiftUI
 @main
 struct TagAlongApp: App {
     @StateObject private var store = Store()
+    @StateObject private var cloud = CloudStore()
+
+    init() {
+        // Must run before any CloudStore (Auth/Firestore) is created. @StateObject
+        // defers CloudStore()'s autoclosure until first body eval, i.e. after this.
+        FirebaseApp.configure()
+    }
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+                .environmentObject(cloud)
                 .preferredColorScheme(.dark)
                 .tint(Theme.brass)
         }
@@ -19,6 +28,7 @@ struct TagAlongApp: App {
 // MARK: - Root (Watch feed + Sing tab)
 
 struct RootView: View {
+    @EnvironmentObject var cloud: CloudStore
     @State private var tab: Tab = .watch
     enum Tab { case watch, sing }
 
@@ -37,6 +47,14 @@ struct RootView: View {
         // .ignoresSafeArea() — nothing lands under the bar by accident.
         .safeAreaInset(edge: .bottom, spacing: 0) { BottomBar(tab: $tab) }
         .ignoresSafeArea(.keyboard)
+        // Central surface for fire-and-forget publish failures.
+        .alert("Community sync failed",
+               isPresented: Binding(get: { cloud.errorMessage != nil },
+                                    set: { if !$0 { cloud.errorMessage = nil } })) {
+            Button("OK", role: .cancel) { cloud.errorMessage = nil }
+        } message: {
+            Text(cloud.errorMessage ?? "")
+        }
     }
 }
 
@@ -74,10 +92,29 @@ struct BottomBar: View {
 
 struct WatchFeedView: View {
     @EnvironmentObject var store: Store
+    @EnvironmentObject var cloud: CloudStore
     @State private var currentId: UUID?
 
-    private var completed: [SongTag] {
-        store.tags.filter { store.isComplete($0.id) }
+    /// One feed row: a fully-local performance, or a cloud-only one still to
+    /// be downloaded (joined lazily when it becomes the current page).
+    private struct FeedItem: Identifiable {
+        let id: UUID
+        let local: SongTag?
+        let cloud: CloudTag?
+    }
+
+    private var items: [FeedItem] {
+        var seen = Set<UUID>()
+        var result: [FeedItem] = []
+        for tag in store.tags where store.isComplete(tag.id) {
+            seen.insert(tag.id)
+            result.append(FeedItem(id: tag.id, local: tag, cloud: nil))
+        }
+        for ct in cloud.cloudTags where ct.isComplete && !seen.contains(ct.id) {
+            seen.insert(ct.id)
+            result.append(FeedItem(id: ct.id, local: nil, cloud: ct))
+        }
+        return result
     }
 
     var body: some View {
@@ -87,17 +124,15 @@ struct WatchFeedView: View {
         GeometryReader { geo in
             ZStack {
                 Theme.stageGradient.ignoresSafeArea()
-                if completed.isEmpty {
+                if items.isEmpty {
                     FeedEmptyState().frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView(.vertical) {
                         LazyVStack(spacing: 0) {
-                            ForEach(completed) { tag in
-                                FeedPage(tag: tag,
-                                         isCurrent: currentId == tag.id,
-                                         insets: geo.safeAreaInsets)
+                            ForEach(items) { item in
+                                page(for: item, insets: geo.safeAreaInsets)
                                     .containerRelativeFrame([.horizontal, .vertical])
-                                    .id(tag.id)
+                                    .id(item.id)
                             }
                         }
                         .scrollTargetLayout()
@@ -106,9 +141,66 @@ struct WatchFeedView: View {
                     .scrollPosition(id: $currentId)
                     .scrollIndicators(.hidden)
                     .ignoresSafeArea()
-                    .onAppear { if currentId == nil { currentId = completed.first?.id } }
+                    .onAppear { if currentId == nil { currentId = items.first?.id } }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func page(for item: FeedItem, insets: EdgeInsets) -> some View {
+        // Prefer a local tag whenever one exists (a cloud page flips to this
+        // once its join finishes and the Store publishes the new tag).
+        if let tag = store.tags.first(where: { $0.id == item.id }), store.isComplete(item.id) {
+            FeedPage(tag: tag, isCurrent: currentId == item.id, insets: insets)
+        } else if let ct = item.cloud {
+            CloudFeedPage(cloudTag: ct, isCurrent: currentId == item.id, insets: insets)
+        }
+    }
+}
+
+/// A cloud-only complete performance. Joins (downloads) lazily when it becomes
+/// the current page; once local, renders the normal FeedPage.
+struct CloudFeedPage: View {
+    @EnvironmentObject var store: Store
+    @EnvironmentObject var cloud: CloudStore
+    let cloudTag: CloudTag
+    let isCurrent: Bool
+    let insets: EdgeInsets
+    @State private var joining = false
+    @State private var failed: String?
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let message = failed {
+                VStack(spacing: 12) {
+                    Text("Couldn’t load this performance").foregroundStyle(.white)
+                    Text(message).font(.caption).foregroundStyle(Theme.textSecondary)
+                    Button("Retry") { failed = nil; joinIfNeeded() }.buttonStyle(.borderedProminent)
+                }
+                .padding(24)
+            } else {
+                VStack(spacing: 14) {
+                    ProgressView().tint(.white)
+                    Text(cloudTag.title).font(.headline).foregroundStyle(.white)
+                    Text("Downloading the quartet…")
+                        .font(.caption).foregroundStyle(Theme.textSecondary)
+                }
+            }
+        }
+        .onAppear { if isCurrent { joinIfNeeded() } }
+        .onChange(of: isCurrent) { _, cur in if cur { joinIfNeeded() } }
+    }
+
+    private func joinIfNeeded() {
+        guard !joining,
+              !store.tags.contains(where: { $0.id == cloudTag.id }) else { return }
+        joining = true
+        Task {
+            do { try await cloud.join(cloudTag: cloudTag, store: store) }
+            catch { failed = error.localizedDescription }
+            joining = false
         }
     }
 }
@@ -257,14 +349,25 @@ struct SoloPill: View {
 
 struct SingView: View {
     @EnvironmentObject var store: Store
+    @EnvironmentObject var cloud: CloudStore
     @State private var showNewTag = false
+    @State private var path: [UUID] = []
+    @State private var joiningId: UUID?
+    @State private var joinError: String?
 
     private var openTags: [SongTag] {
         store.tags.filter { !store.isComplete($0.id) }
     }
 
+    /// Community open invitations not already downloaded locally.
+    private var communityTags: [CloudTag] {
+        cloud.cloudTags.filter { ct in
+            !ct.isComplete && !store.tags.contains(where: { $0.id == ct.id })
+        }
+    }
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Button { showNewTag = true } label: {
@@ -295,14 +398,21 @@ struct SingView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.top, 60)
                     } else {
-                        Text("In progress")
-                            .font(.caption.weight(.bold))
-                            .tracking(1)
-                            .foregroundStyle(Theme.textSecondary)
-                            .padding(.top, 4)
+                        sectionHeader("In progress")
                         ForEach(openTags) { tag in
                             NavigationLink(value: tag.id) { OpenTagCard(tag: tag) }
                                 .buttonStyle(.plain)
+                        }
+                    }
+
+                    if !communityTags.isEmpty {
+                        sectionHeader("From the community")
+                        ForEach(communityTags) { ct in
+                            Button { join(ct) } label: {
+                                CommunityTagCard(cloudTag: ct, joining: joiningId == ct.id)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(joiningId != nil)
                         }
                     }
                 }
@@ -316,7 +426,73 @@ struct SingView: View {
                 }
             }
             .sheet(isPresented: $showNewTag) { NewTagSheet() }
+            .alert("Couldn’t join", isPresented: Binding(get: { joinError != nil },
+                                                         set: { if !$0 { joinError = nil } })) {
+                Button("OK", role: .cancel) { joinError = nil }
+            } message: { Text(joinError ?? "") }
         }
+    }
+
+    private func sectionHeader(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.weight(.bold))
+            .tracking(1)
+            .foregroundStyle(Theme.textSecondary)
+            .padding(.top, 4)
+    }
+
+    /// Download the tag, then push straight into its detail view.
+    private func join(_ ct: CloudTag) {
+        joiningId = ct.id
+        Task {
+            do {
+                try await cloud.join(cloudTag: ct, store: store)
+                joiningId = nil
+                path.append(ct.id)
+            } catch {
+                joiningId = nil
+                joinError = error.localizedDescription
+            }
+        }
+    }
+}
+
+/// Community open-tag card: OpenTagCard visuals driven by the cloud tag's
+/// `parts` set, plus a cloud badge and an inline join spinner.
+struct CommunityTagCard: View {
+    let cloudTag: CloudTag
+    let joining: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "cloud.fill")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                Text(cloudTag.title).font(.headline).foregroundStyle(Theme.textPrimary)
+                Spacer()
+                if joining { ProgressView().tint(Theme.brass) } else { KeyChip(key: cloudTag.key) }
+            }
+            HStack(spacing: 8) {
+                ForEach(Part.allCases) { part in
+                    let filled = cloudTag.parts.contains(part)
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(filled ? part.color : Color.clear)
+                            .overlay(Circle().stroke(part.color.opacity(filled ? 0 : 0.7),
+                                                     style: StrokeStyle(lineWidth: 1.5, dash: [2.5])))
+                            .frame(width: 9, height: 9)
+                        Text(part.label)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(filled ? Theme.textPrimary : Theme.textSecondary)
+                    }
+                    if part != Part.allCases.last { Spacer() }
+                }
+            }
+        }
+        .padding(16)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Theme.line, lineWidth: 1))
     }
 }
 
@@ -396,6 +572,7 @@ struct RecordRequest: Identifiable {
 
 struct TagDetailView: View {
     @EnvironmentObject var store: Store
+    @EnvironmentObject var cloud: CloudStore
     @Environment(\.dismiss) private var dismiss
     let tag: SongTag
     @StateObject private var player = QuartetPlayer()
@@ -495,6 +672,16 @@ struct TagDetailView: View {
                 ShareChromeButton { exportTrigger = true }
             }
             Menu {
+                if liveTag.publishedAt == nil {
+                    Button {
+                        Task {
+                            do { try await cloud.publish(tag: liveTag, takes: store.takes(for: tag.id), store: store) }
+                            catch { cloud.errorMessage = error.localizedDescription }
+                        }
+                    } label: { Label("Publish to community", systemImage: "icloud.and.arrow.up") }
+                } else {
+                    Label("Published to community", systemImage: "checkmark.icloud")
+                }
                 Button(role: .destructive) {
                     store.delete(tag: tag); dismiss()
                 } label: { Label("Delete tag", systemImage: "trash") }
@@ -631,6 +818,7 @@ struct PartBadge: View {
 
 struct RecordView: View {
     @EnvironmentObject var store: Store
+    @EnvironmentObject var cloud: CloudStore
     @Environment(\.dismiss) private var dismiss
     let tag: SongTag
     let part: Part
@@ -743,7 +931,26 @@ struct RecordView: View {
             store.add(take: take)
             controller.confirmSaved() // BEFORE teardown/dismiss — or the discard path deletes the saved file
             controller.teardown()
+            publishToCloud(take)
             dismiss()
+        }
+    }
+
+    /// Every tag is an open invitation, so the FIRST saved take publishes the
+    /// whole tag; once published, each further take just uploads itself. Both
+    /// are fire-and-forget — a failure surfaces via the app-level alert.
+    private func publishToCloud(_ take: Take) {
+        let liveTag = store.tags.first(where: { $0.id == tag.id }) ?? tag
+        Task {
+            do {
+                if liveTag.publishedAt == nil {
+                    try await cloud.publish(tag: liveTag, takes: store.takes(for: tag.id), store: store)
+                } else {
+                    try await cloud.publishTake(take, for: liveTag, store: store)
+                }
+            } catch {
+                cloud.errorMessage = error.localizedDescription
+            }
         }
     }
 

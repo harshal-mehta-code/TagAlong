@@ -4,11 +4,25 @@ options:
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
+packages:
+  Firebase:
+    url: https://github.com/firebase/firebase-ios-sdk
+    from: "11.0.0"
 targets:
   TagAlong:
     type: application
     platform: iOS
-    sources: [TagAlong]
+    sources:
+      - TagAlong
+      - path: GoogleService-Info.plist
+        buildPhase: resources
+    dependencies:
+      - package: Firebase
+        product: FirebaseAuth
+      - package: Firebase
+        product: FirebaseFirestore
+      - package: Firebase
+        product: FirebaseStorage
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hninetythree.tagalong
