@@ -108,6 +108,11 @@ final class RecordController: ObservableObject {
             stage = .ready
             return
         }
+        if duration <= 0 {
+            // Sample-time bookkeeping can lose a timestamp (race at stop);
+            // the finalized file's duration is the truth.
+            duration = (try? await AVURLAsset(url: url).load(.duration).seconds) ?? 0
+        }
         let t0 = recorder.fileTime(ofHostTime: t0HeardHost)
         pendingTake = Take(
             tagId: tagId,

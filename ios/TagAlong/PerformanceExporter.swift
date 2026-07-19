@@ -1,4 +1,5 @@
 import AVFoundation
+import Photos
 import SwiftUI
 import UIKit
 
@@ -54,18 +55,27 @@ final class PerformanceExporter: ObservableObject {
 
         let ts: CMTimeScale = 600
         let playStart = QuartetPlayer.playStartSec
-        let masterEnd = quartet.values.map { $0.durationSec - $0.startSec }.max() ?? 0
+
+        // Load every asset up front and trust the FILE's duration over stored
+        // metadata: early builds persisted durationSec 0 on a capture race,
+        // and trusting it silently dropped that part's quadrant.
+        var sources: [(part: Part, take: Take, asset: AVURLAsset, fileDur: Double)] = []
+        for part in Part.allCases {
+            guard let take = quartet[part] else { continue }
+            let asset = AVURLAsset(url: store.mediaURL(for: take))
+            let assetDur = (try? await asset.load(.duration).seconds) ?? 0
+            let fileDur = max(take.durationSec, assetDur)
+            if fileDur > 0 { sources.append((part, take, asset, fileDur)) }
+        }
+        guard !sources.isEmpty else { throw ExportError.noTakes }
+        let masterEnd = sources.map { $0.fileDur - $0.take.startSec }.max() ?? 0
         let windowLen = masterEnd - playStart
 
         let composition = AVMutableComposition()
         var layerInstructions: [AVMutableVideoCompositionLayerInstruction] = []
         var audioParams: [AVMutableAudioMixInputParameters] = []
 
-        // Deterministic part order for stable z-order (quadrants don't overlap,
-        // so order is cosmetic — but keep it predictable).
-        for part in Part.allCases {
-            guard let take = quartet[part] else { continue }
-            let asset = AVURLAsset(url: store.mediaURL(for: take))
+        for (part, take, asset, fileDur) in sources {
             let videoTracks = try await asset.loadTracks(withMediaType: .video)
             let audioTracks = try await asset.loadTracks(withMediaType: .audio)
             guard let srcVideo = videoTracks.first else { continue }
@@ -74,12 +84,17 @@ final class PerformanceExporter: ObservableObject {
             // the file length; a shorter take just leaves its quadrant blank
             // once its media runs out.
             let sourceStart = take.startSec + playStart
-            let sourceEnd = min(take.durationSec, take.startSec + playStart + windowLen)
-            let dur = max(0, sourceEnd - sourceStart)
-            guard dur > 0 else { continue }
+            let sourceEnd = min(fileDur, take.startSec + playStart + windowLen)
+            guard sourceEnd > sourceStart else { continue }
+
+            // Audio can outlast video by a few frames (or vice versa); an
+            // insert past a track's own extent throws, so clamp per track.
+            let videoTrackEnd = (try await srcVideo.load(.timeRange)).end.seconds
+            let videoDur = max(0, min(sourceEnd, videoTrackEnd) - sourceStart)
+            guard videoDur > 0 else { continue }
             let srcRange = CMTimeRange(
                 start: CMTime(seconds: sourceStart, preferredTimescale: ts),
-                duration: CMTime(seconds: dur, preferredTimescale: ts))
+                duration: CMTime(seconds: videoDur, preferredTimescale: ts))
 
             guard let compVideo = composition.addMutableTrack(
                 withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
@@ -100,10 +115,17 @@ final class PerformanceExporter: ObservableObject {
             if let srcAudio = audioTracks.first,
                let compAudio = composition.addMutableTrack(
                 withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
-                try compAudio.insertTimeRange(srcRange, of: srcAudio, at: .zero)
-                let ap = AVMutableAudioMixInputParameters(track: compAudio)
-                ap.setVolume(1, at: .zero)
-                audioParams.append(ap)
+                let audioTrackEnd = (try await srcAudio.load(.timeRange)).end.seconds
+                let audioDur = max(0, min(sourceEnd, audioTrackEnd) - sourceStart)
+                if audioDur > 0 {
+                    let audioRange = CMTimeRange(
+                        start: CMTime(seconds: sourceStart, preferredTimescale: ts),
+                        duration: CMTime(seconds: audioDur, preferredTimescale: ts))
+                    try compAudio.insertTimeRange(audioRange, of: srcAudio, at: .zero)
+                    let ap = AVMutableAudioMixInputParameters(track: compAudio)
+                    ap.setVolume(1, at: .zero)
+                    audioParams.append(ap)
+                }
             }
         }
 
@@ -340,7 +362,7 @@ private struct PerformanceExportModifier: ViewModifier {
                     }
                 }
             }
-            .sheet(item: $payload) { p in ActivityView(items: [p.url]) }
+            .sheet(item: $payload) { p in ExportResultSheet(url: p.url) }
             .alert("Couldn't share", isPresented: Binding(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } })
@@ -349,6 +371,92 @@ private struct PerformanceExportModifier: ViewModifier {
             } message: {
                 Text(errorMessage ?? "")
             }
+    }
+}
+
+/// Post-export destination sheet: Save to Photos is the tap most users want,
+/// so it gets a first-class button instead of hiding inside the share sheet.
+private struct ExportResultSheet: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var shareShown = false
+    @State private var saveState: SaveState = .idle
+
+    enum SaveState: Equatable { case idle, saving, saved, failed(String) }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text("Performance ready")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Theme.textPrimary)
+                .padding(.top, 22)
+
+            Button(action: saveToPhotos) {
+                HStack(spacing: 8) {
+                    switch saveState {
+                    case .saving:
+                        ProgressView().tint(.black)
+                    case .saved:
+                        Image(systemName: "checkmark.circle.fill")
+                        Text("Saved to Photos")
+                    default:
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Save to Photos")
+                    }
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(saveState == .saved ? Theme.brassSoft : Theme.brass,
+                            in: RoundedRectangle(cornerRadius: 14))
+                .foregroundStyle(.black.opacity(0.85))
+            }
+            .disabled(saveState == .saving || saveState == .saved)
+
+            Button { shareShown = true } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "square.and.arrow.up")
+                    Text("Share…")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(RoundedRectangle(cornerRadius: 14).stroke(Theme.brass, lineWidth: 1.5))
+                .foregroundStyle(Theme.brass)
+            }
+
+            if case .failed(let message) = saveState {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.record)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 16)
+        .presentationDetents([.height(240)])
+        .presentationBackground(Theme.card)
+        .sheet(isPresented: $shareShown) { ActivityView(items: [url]) }
+    }
+
+    private func saveToPhotos() {
+        saveState = .saving
+        Task {
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status == .authorized || status == .limited else {
+                saveState = .failed("Allow photo access in Settings to save.")
+                return
+            }
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+                }
+                saveState = .saved
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch {
+                saveState = .failed(error.localizedDescription)
+            }
+        }
     }
 }
 

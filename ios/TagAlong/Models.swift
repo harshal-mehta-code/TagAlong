@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SwiftUI
 
@@ -71,6 +72,24 @@ final class Store: ObservableObject {
     init() {
         dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         load()
+        healDurations()
+    }
+
+    /// Repair takes persisted with durationSec 0 (a capture race at stop lost
+    /// a sample timestamp in early builds): the finalized file is the truth.
+    private func healDurations() {
+        let broken = takes.filter { $0.durationSec <= 0 }
+        guard !broken.isEmpty else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            for take in broken {
+                guard let dur = try? await AVURLAsset(url: self.mediaURL(for: take)).load(.duration).seconds,
+                      dur > 0,
+                      let i = self.takes.firstIndex(where: { $0.id == take.id }) else { continue }
+                self.takes[i].durationSec = dur
+            }
+            self.save()
+        }
     }
 
     func mediaURL(for take: Take) -> URL { dir.appendingPathComponent(take.fileName) }

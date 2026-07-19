@@ -17,6 +17,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_NSCameraUsageDescription: "TagAlong records video of you singing your part."
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "TagAlong records your voice so the quartet can sing together."
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "TagAlong saves your finished performances to your photo library."
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_UIUserInterfaceStyle: Dark
