@@ -1,5 +1,10 @@
 # 08 — Execution Plan (locked 2026-07-18)
 
+> **2026-07-19 update:** after the first end-to-end cloud test, the UX plan here
+> is superseded by **docs/10-product-design-v2.md** (ownership model, sing/watch
+> unification, social layer, "tag along" verb, invites, WP5–WP10 sequence).
+> Backend schema, Track B gating, and WP3 remain as written below.
+
 Doc 07's three open decisions, resolved (user delegated the call):
 
 1. **Backend: Firebase** — Auth + Firestore + Storage + Functions + FCM. Fastest path, matches doc 04's original analysis.
