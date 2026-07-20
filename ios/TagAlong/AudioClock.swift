@@ -125,7 +125,10 @@ final class AudioClock {
                 buf.floatChannelData?[ch][i] = sample
             }
         }
-        player.scheduleBuffer(buf, at: nil, options: [])
+        // .interrupts cuts off whatever note is currently sounding instead of
+        // queuing behind it — without this, rapid taps on different notes
+        // played in submission order with an audible delay.
+        player.scheduleBuffer(buf, at: nil, options: [.interrupts])
         if !player.isPlaying { player.play() }
     }
 
