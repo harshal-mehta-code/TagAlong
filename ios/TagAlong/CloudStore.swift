@@ -322,21 +322,33 @@ final class CloudStore: ObservableObject {
         store.delete(tag: tag)
     }
 
-    /// Contributor: remove MY voice from a tag, cloud + local. The tag reverts
-    /// to n-1 parts and the slot reopens for anyone.
-    func removeMyVoice(from tag: SongTag, store: Store) async throws {
+    /// Remove ONE of my takes, cloud + local. The part's slot reopens (or
+    /// falls back to another singer's take) and the tag doc's completeness is
+    /// refreshed. Never-published tags skip the cloud round-trip entirely so a
+    /// local-only delete can't conjure a junk tag doc.
+    func removeMyTake(_ take: Take, from tag: SongTag, store: Store) async throws {
+        guard tag.publishedAt != nil else {
+            store.delete(take: take)
+            return
+        }
         guard uid != nil else { throw CloudError.notSignedIn }
         let tagRef = db.collection("tags").document(tag.id.uuidString)
-        for take in store.takes(for: tag.id) where store.isMine(take) {
-            if take.uploadedAt != nil {
-                let ref = tagRef.collection("takes").document(take.id.uuidString)
-                if let path = try await ref.getDocument().data()?["storagePath"] as? String {
-                    try? await storage.reference(withPath: path).delete()
-                }
-                try await ref.delete()
+        if take.uploadedAt != nil {
+            let ref = tagRef.collection("takes").document(take.id.uuidString)
+            if let path = try await ref.getDocument().data()?["storagePath"] as? String {
+                try? await storage.reference(withPath: path).delete()
             }
-            store.delete(take: take)
+            try await ref.delete()
         }
+        store.delete(take: take)
         try await recomputeCompletion(tagRef)
+    }
+
+    /// Contributor: remove MY voice from a tag entirely, cloud + local. The
+    /// tag reverts to n-1 parts and the slots reopen for anyone.
+    func removeMyVoice(from tag: SongTag, store: Store) async throws {
+        for take in store.takes(for: tag.id) where store.isMine(take) {
+            try await removeMyTake(take, from: tag, store: store)
+        }
     }
 }

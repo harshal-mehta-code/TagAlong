@@ -46,6 +46,9 @@ struct PressScale: ButtonStyle {
 /// and "Quartet complete" breathes in and out — then the caller auto-plays
 /// the finished performance. Respects Reduce Motion (plain fade + text).
 struct CelebrationView: View {
+    /// House-vocabulary flourish under the title (docs/10 §D), e.g.
+    /// "You tagged along — the chord rings".
+    var subtitle: String? = nil
     /// Clockwise from the top-left tile: tenor → lead → bass → bari.
     let onFinish: () -> Void
 
@@ -69,12 +72,19 @@ struct CelebrationView: View {
                 }
             }
 
-            Text("Quartet complete")
-                .font(.system(size: 34, weight: .semibold, design: .serif))
-                .foregroundStyle(Theme.ivory)
-                .shadow(color: Theme.brass.opacity(0.6), radius: 12)
-                .opacity(titleShown ? 1 : 0)
-                .scaleEffect(titleShown ? 1 : 0.92)
+            VStack(spacing: 10) {
+                Text("Quartet complete")
+                    .font(.system(size: 34, weight: .semibold, design: .serif))
+                    .foregroundStyle(Theme.ivory)
+                    .shadow(color: Theme.brass.opacity(0.6), radius: 12)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(.subheadline, design: .serif))
+                        .foregroundStyle(Theme.brassSoft)
+                }
+            }
+            .opacity(titleShown ? 1 : 0)
+            .scaleEffect(titleShown ? 1 : 0.92)
         }
         .allowsHitTesting(false)
         .task { reduceMotion ? await runReduced() : await runFull() }
