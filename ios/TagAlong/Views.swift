@@ -360,12 +360,19 @@ struct TagDetailView: View {
 
     private func tapTile(_ part: Part) {
         Haptics.select()
+        // An empty tile has exactly one action — skip the bar and go straight
+        // to recording, same as tapping "Tag Along" would. The action bar earns
+        // its keep only where there's an actual choice (mine/theirs).
+        guard quartet[part] != nil else {
+            startRecording(part)
+            return
+        }
         if focused == part {
             focused = nil
             player.solo = nil
         } else {
             focused = part
-            player.solo = quartet[part] != nil ? part : nil
+            player.solo = part
         }
     }
 
