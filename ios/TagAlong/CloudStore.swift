@@ -276,9 +276,9 @@ final class CloudStore: ObservableObject {
         uploadProgress[take.id] = 0
         _ = try await storage.reference(withPath: storagePath)
             .putFileAsync(from: uploadURL, metadata: meta) { [weak self] progress in
-                guard let progress, progress.totalUnitCount > 0 else { return }
+                guard let self, let progress, progress.totalUnitCount > 0 else { return }
                 let fraction = Double(progress.completedUnitCount) / Double(progress.totalUnitCount)
-                Task { @MainActor [weak self] in self?.uploadProgress[take.id] = fraction }
+                Task { @MainActor in self.uploadProgress[take.id] = fraction }
             }
 
         try await tagRef.collection("takes").document(take.id.uuidString).setData([

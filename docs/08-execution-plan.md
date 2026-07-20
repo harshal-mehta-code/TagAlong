@@ -5,6 +5,11 @@
 > unification, social layer, "tag along" verb, invites, WP5–WP10 sequence).
 > Backend schema, Track B gating, and WP3 remain as written below.
 
+> **2026-07-20 update:** WP5–WP10 are implemented on branch
+> `claude/product-design-v2-impl-dq7mgs` (cloud session, no Xcode — unbuilt).
+> See **docs/11-v2-implementation-handoff.md** for the build/verify checklist
+> and rules deploy step. WP3 remains open.
+
 Doc 07's three open decisions, resolved (user delegated the call):
 
 1. **Backend: Firebase** — Auth + Firestore + Storage + Functions + FCM. Fastest path, matches doc 04's original analysis.
