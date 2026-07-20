@@ -197,8 +197,14 @@ struct FeedPage: View {
     @State private var userPaused = false
     @State private var exportTrigger = false
     @State private var confirmDeleteEveryone = false
+    @State private var ringFlash = false
 
     private var quartet: [Part: Take] { store.quartet(for: tag.id) }
+    /// Published tags have a live cloud twin → the social rail (docs/10 §C).
+    private var matchingCloud: CloudTag? { cloud.cloudTags.first(where: { $0.id == tag.id }) }
+    private var creditOwners: [Part: String?] {
+        quartet.mapValues { store.isMine($0) ? nil : $0.ownerUid }
+    }
 
     var body: some View {
         ZStack {
@@ -216,6 +222,26 @@ struct FeedPage: View {
             }
             .padding(.top, insets.top)
             .padding(.bottom, insets.bottom)
+
+            if let ct = matchingCloud {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        SocialRailHost(cloudTag: ct,
+                                       owners: creditOwners,
+                                       onShareVideo: { exportTrigger = true },
+                                       onRang: shimmer)
+                    }
+                }
+                .padding(.trailing, 6)
+                .padding(.bottom, insets.bottom + 84)
+            }
+
+            // Golden shimmer when a ring lands (docs/10 §C).
+            Theme.brass.opacity(ringFlash ? 0.2 : 0)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
 
             transportButton
         }
@@ -255,7 +281,9 @@ struct FeedPage: View {
                 KeyChip(key: tag.key)
             }
             Spacer()
-            ShareChromeButton { exportTrigger = true }
+            if matchingCloud == nil {
+                ShareChromeButton { exportTrigger = true }
+            }
             Menu {
                 roleAwareDeleteItems
             } label: {
@@ -338,6 +366,14 @@ struct FeedPage: View {
         Task { await player.play() }
     }
     private func deactivate() { player.unload() }
+
+    private func shimmer() {
+        withAnimation(.easeOut(duration: 0.15)) { ringFlash = true }
+        Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            withAnimation(.easeOut(duration: 0.7)) { ringFlash = false }
+        }
+    }
 }
 
 // MARK: - Community page (complete = the show, open = the invitation)
@@ -360,6 +396,8 @@ struct CloudPerformancePage: View {
     @State private var fetching = false
     @State private var failed: String?
     @State private var userPaused = false
+    @State private var exportTrigger = false
+    @State private var ringFlash = false
 
     var body: some View {
         ZStack {
@@ -395,6 +433,26 @@ struct CloudPerformancePage: View {
             .padding(.top, insets.top)
             .padding(.bottom, insets.bottom + 12)
 
+            if let takeSet {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        SocialRailHost(cloudTag: cloudTag,
+                                       owners: takeSet.featured.mapValues { $0.ownerUid },
+                                       onShareVideo: cloudTag.isComplete ? { exportTrigger = true } : nil,
+                                       onRang: shimmer)
+                    }
+                }
+                .padding(.trailing, 6)
+                .padding(.bottom, insets.bottom + (cloudTag.isComplete ? 84 : 150))
+            }
+
+            // Golden shimmer when a ring lands (docs/10 §C).
+            Theme.brass.opacity(ringFlash ? 0.2 : 0)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+
             if takeSet != nil { transportButton }
         }
         .onAppear { if isCurrent { activate() } }
@@ -404,6 +462,13 @@ struct CloudPerformancePage: View {
             if !playing, isCurrent, !userPaused, !player.slots.isEmpty {
                 Task { await player.play() }
             }
+        }
+        .performanceExport(isActive: $exportTrigger,
+                           title: cloudTag.title,
+                           quartet: takeSet?.featured ?? [:],
+                           mediaURL: { cache.url(for: $0) }) {
+            userPaused = true
+            player.pause()
         }
     }
 
@@ -422,6 +487,19 @@ struct CloudPerformancePage: View {
                     cloud.hide(tagId: cloudTag.id)
                 } label: {
                     Label("Not interested", systemImage: "hand.raised")
+                }
+                // Moderation minimums (docs/10 §F5) — required for UGC.
+                Menu {
+                    ForEach(["Inappropriate", "Copyright", "Spam", "Something else"], id: \.self) { reason in
+                        Button(reason) { cloud.report(tagId: cloudTag.id, reason: reason) }
+                    }
+                } label: {
+                    Label("Report", systemImage: "flag")
+                }
+                Button(role: .destructive) {
+                    cloud.block(uid: cloudTag.creatorUid)
+                } label: {
+                    Label("Block this singer", systemImage: "nosign")
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -513,4 +591,12 @@ struct CloudPerformancePage: View {
     }
 
     private func deactivate() { player.unload() }
+
+    private func shimmer() {
+        withAnimation(.easeOut(duration: 0.15)) { ringFlash = true }
+        Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            withAnimation(.easeOut(duration: 0.7)) { ringFlash = false }
+        }
+    }
 }

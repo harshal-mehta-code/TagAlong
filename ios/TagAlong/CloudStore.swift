@@ -16,6 +16,7 @@ struct CloudTag: Identifiable {
     let parts: [Part]
     let createdAt: Date
     let ringCount: Int
+    let commentCount: Int
     let inviteCode: String?
     let lyrics: String?
     let notes: String?
@@ -182,6 +183,7 @@ final class CloudStore: ObservableObject {
             parts: parts,
             createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
             ringCount: data["ringCount"] as? Int ?? 0,
+            commentCount: data["commentCount"] as? Int ?? 0,
             inviteCode: data["inviteCode"] as? String,
             lyrics: lyrics,
             notes: notes,
@@ -351,4 +353,88 @@ final class CloudStore: ObservableObject {
             try await removeMyTake(take, from: tag, store: store)
         }
     }
+
+    // MARK: - Social layer (docs/10 §C, §F5)
+
+    /// Did I ring this tag? One doc per user under tags/{id}/rings/{uid}.
+    func hasRung(tagId: UUID) async -> Bool {
+        guard let uid else { return false }
+        let doc = try? await db.collection("tags").document(tagId.uuidString)
+            .collection("rings").document(uid).getDocument()
+        return doc?.exists ?? false
+    }
+
+    /// Ring (or un-ring) a tag — when a barbershop chord locks, it rings.
+    /// The per-user doc is the truth; ringCount on the tag doc mirrors it so
+    /// the single feed listener carries live counts.
+    func setRing(tagId: UUID, ringing: Bool) async throws {
+        guard let uid else { throw CloudError.notSignedIn }
+        let tagRef = db.collection("tags").document(tagId.uuidString)
+        let ringRef = tagRef.collection("rings").document(uid)
+        if ringing {
+            try await ringRef.setData(["createdAt": FieldValue.serverTimestamp()])
+        } else {
+            try await ringRef.delete()
+        }
+        try await tagRef.setData(["ringCount": FieldValue.increment(Int64(ringing ? 1 : -1))],
+                                 merge: true)
+    }
+
+    /// The afterglow, oldest first (newest lands at the bottom of the sheet).
+    func comments(tagId: UUID) async throws -> [CloudComment] {
+        let snap = try await db.collection("tags").document(tagId.uuidString)
+            .collection("comments")
+            .order(by: "createdAt")
+            .limit(to: 200)
+            .getDocuments()
+        return snap.documents.compactMap { doc in
+            let data = doc.data()
+            guard let uid = data["uid"] as? String,
+                  let text = data["text"] as? String else { return nil }
+            return CloudComment(id: doc.documentID,
+                                uid: uid,
+                                name: data["displayName"] as? String,
+                                text: text,
+                                createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date())
+        }
+    }
+
+    /// Post to the afterglow (280 chars, signed with the display name the
+    /// sheet collected first). Mirrors commentCount onto the tag doc.
+    func postComment(tagId: UUID, text: String) async throws {
+        guard let uid else { throw CloudError.notSignedIn }
+        let clean = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(280))
+        guard !clean.isEmpty else { return }
+        let tagRef = db.collection("tags").document(tagId.uuidString)
+        _ = try await tagRef.collection("comments").addDocument(data: [
+            "uid": uid,
+            "displayName": displayName ?? "A stranger",
+            "text": clean,
+            "createdAt": FieldValue.serverTimestamp()
+        ])
+        try await tagRef.setData(["commentCount": FieldValue.increment(Int64(1))], merge: true)
+    }
+
+    /// Report (docs/10 §F5): drop the report in the write-only box and hide
+    /// the tag locally right away. Fire-and-forget.
+    func report(tagId: UUID, reason: String) {
+        if let uid {
+            db.collection("reports").addDocument(data: [
+                "uid": uid,
+                "tagId": tagId.uuidString,
+                "reason": reason,
+                "createdAt": FieldValue.serverTimestamp()
+            ])
+        }
+        hide(tagId: tagId)
+    }
+}
+
+/// One afterglow comment.
+struct CloudComment: Identifiable {
+    let id: String
+    let uid: String
+    let name: String?
+    let text: String
+    let createdAt: Date
 }

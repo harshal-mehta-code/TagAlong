@@ -44,6 +44,12 @@ final class PerformanceExporter: ObservableObject {
     private var progressTimer: Timer?
 
     func export(tag: SongTag, quartet: [Part: Take], store: Store) async throws -> URL {
+        try await export(title: tag.title, quartet: quartet) { store.mediaURL(for: $0) }
+    }
+
+    /// Media-source-agnostic export: the library renders from Documents, the
+    /// Watch feed straight from the CloudCache (docs/10 §A).
+    func export(title: String, quartet: [Part: Take], mediaURL: (Take) -> URL) async throws -> URL {
         guard !quartet.isEmpty else { throw ExportError.noTakes }
         isExporting = true
         progress = 0
@@ -62,7 +68,7 @@ final class PerformanceExporter: ObservableObject {
         var sources: [(part: Part, take: Take, asset: AVURLAsset, fileDur: Double)] = []
         for part in Part.allCases {
             guard let take = quartet[part] else { continue }
-            let asset = AVURLAsset(url: store.mediaURL(for: take))
+            let asset = AVURLAsset(url: mediaURL(take))
             let assetDur = (try? await asset.load(.duration).seconds) ?? 0
             let fileDur = max(take.durationSec, assetDur)
             if fileDur > 0 { sources.append((part, take, asset, fileDur)) }
@@ -139,13 +145,13 @@ final class PerformanceExporter: ObservableObject {
         videoComposition.renderSize = Self.renderSize
         videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
         videoComposition.instructions = [instruction]
-        Self.attachWatermark(to: videoComposition, title: tag.title)
+        Self.attachWatermark(to: videoComposition, title: title)
 
         let audioMix = AVMutableAudioMix()
         audioMix.inputParameters = audioParams
 
         let outURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(Self.sanitize(tag.title) + ".mp4")
+            .appendingPathComponent(Self.sanitize(title) + ".mp4")
         try? FileManager.default.removeItem(at: outURL)
 
         guard let session = AVAssetExportSession(
@@ -312,15 +318,28 @@ extension View {
                            store: Store,
                            onStart: @escaping () -> Void) -> some View {
         modifier(PerformanceExportModifier(
-            isActive: isActive, tag: tag, quartet: quartet, store: store, onStart: onStart))
+            isActive: isActive, title: tag.title, quartet: quartet,
+            mediaURL: { store.mediaURL(for: $0) }, onStart: onStart))
+    }
+
+    /// Cache-backed variant for community feed pages (docs/10 §A: the library
+    /// is never touched by watching — or by sharing what you watched).
+    func performanceExport(isActive: Binding<Bool>,
+                           title: String,
+                           quartet: [Part: Take],
+                           mediaURL: @escaping (Take) -> URL,
+                           onStart: @escaping () -> Void) -> some View {
+        modifier(PerformanceExportModifier(
+            isActive: isActive, title: title, quartet: quartet,
+            mediaURL: mediaURL, onStart: onStart))
     }
 }
 
 private struct PerformanceExportModifier: ViewModifier {
     @Binding var isActive: Bool
-    let tag: SongTag
+    let title: String
     let quartet: [Part: Take]
-    let store: Store
+    let mediaURL: (Take) -> URL
     let onStart: () -> Void
 
     @StateObject private var exporter = PerformanceExporter()
@@ -353,7 +372,7 @@ private struct PerformanceExportModifier: ViewModifier {
                 Task {
                     defer { isActive = false }
                     do {
-                        let url = try await exporter.export(tag: tag, quartet: quartet, store: store)
+                        let url = try await exporter.export(title: title, quartet: quartet, mediaURL: mediaURL)
                         payload = SharePayload(url: url)
                     } catch is CancellationError {
                         // ignore
