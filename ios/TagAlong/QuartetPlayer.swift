@@ -16,7 +16,11 @@ final class QuartetPlayer: ObservableObject {
     @Published var solo: Part? = nil {
         didSet { applyVolumes() }
     }
-    private(set) var slots: [Part: Slot] = [:]
+    // Must be @Published: QuartetGrid reads this directly to decide whether a
+    // tile shows video — without the publish, load() populating this dict is
+    // invisible to SwiftUI and tiles can be stuck showing their pre-load state
+    // even while the underlying AVPlayers are already playing (audio only).
+    @Published private(set) var slots: [Part: Slot] = [:]
     private var masterEndSec: Double = 0
     private var endTimer: Timer?
 

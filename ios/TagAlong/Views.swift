@@ -548,7 +548,7 @@ struct LyricsSheet: View {
 /// indicator, or tab bar no matter how far the grid bleeds.
 struct QuartetGrid: View {
     let quartet: [Part: Take]
-    let player: QuartetPlayer
+    @ObservedObject var player: QuartetPlayer
     var soloable: Bool = false
     /// Parts whose takes are mine — gates the long-press shortcut menu.
     var ownedParts: Set<Part> = []
