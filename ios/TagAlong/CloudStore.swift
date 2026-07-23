@@ -61,6 +61,9 @@ final class CloudStore: ObservableObject {
     @Published private(set) var blockedUids: Set<String>
     /// takeId → 0…1 while its media uploads (docs/10 §F6).
     @Published private(set) var uploadProgress: [UUID: Double] = [:]
+    /// Tags whose most recent publish/upload attempt failed — drives the
+    /// "tap to retry" affordance on cards. Local UI state only, not persisted.
+    @Published var failedTagIds: Set<UUID> = []
 
     private let db = Firestore.firestore()
     private let storage = Storage.storage()
@@ -89,10 +92,12 @@ final class CloudStore: ObservableObject {
                 uid = try await Auth.auth().signInAnonymously().user.uid
             } catch {
                 errorMessage = "Sign-in failed: \(error.localizedDescription)"
+                Diagnostics.logError("signIn", error)
             }
         }
         syncUserDoc()
         startFeed()
+        Diagnostics.flushPendingCrash()
     }
 
     // MARK: - Identity
@@ -303,6 +308,26 @@ final class CloudStore: ObservableObject {
             "isComplete": isComplete,
             "completedAt": isComplete ? FieldValue.serverTimestamp() : FieldValue.delete()
         ], merge: true)
+    }
+
+    /// Re-attempt a failed publish/upload for this tag — whichever of my
+    /// takes never made it to the cloud last time. Clears the failed flag on
+    /// success; re-sets it (and re-surfaces the alert) on another failure.
+    func retryPublish(tag: SongTag, store: Store) async {
+        do {
+            if tag.publishedAt == nil {
+                try await publish(tag: tag, takes: store.takes(for: tag.id), store: store)
+            } else {
+                for take in store.takes(for: tag.id) where store.isMine(take) && take.uploadedAt == nil {
+                    try await publishTake(take, for: tag, store: store)
+                }
+            }
+            failedTagIds.remove(tag.id)
+        } catch {
+            errorMessage = error.localizedDescription
+            failedTagIds.insert(tag.id)
+            Diagnostics.logError("retryPublish", error)
+        }
     }
 
     // MARK: - Role-aware deletes (docs/10 §A)

@@ -39,6 +39,7 @@ final class RecordController: ObservableObject {
                 configured = true
             } catch {
                 stage = .failed(error.localizedDescription)
+                Diagnostics.logError("recorder.configure", error)
                 return
             }
         }
@@ -55,6 +56,7 @@ final class RecordController: ObservableObject {
             try recorder.startWriting(to: url)
         } catch {
             stage = .failed(error.localizedDescription)
+            Diagnostics.logError("recorder.startWriting", error)
             return
         }
         fileURL = url
@@ -102,6 +104,7 @@ final class RecordController: ObservableObject {
             duration = try await recorder.stopWriting()
         } catch {
             stage = .failed(error.localizedDescription)
+            Diagnostics.logError("recorder.stopWriting", error)
             return
         }
         guard let tagId, let url = fileURL else {

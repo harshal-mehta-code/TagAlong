@@ -64,11 +64,27 @@ struct SingView: View {
                     if !libraryOpen.isEmpty {
                         sectionHeader("In progress")
                         ForEach(libraryOpen) { tag in
-                            NavigationLink(value: tag.id) {
-                                TagCard(model: TagCardModel(tag: tag, store: store),
-                                        uploadProgress: uploadProgress(for: tag))
+                            VStack(alignment: .leading, spacing: 6) {
+                                NavigationLink(value: tag.id) {
+                                    TagCard(model: TagCardModel(tag: tag, store: store),
+                                            uploadProgress: uploadProgress(for: tag),
+                                            uploadFailed: cloud.failedTagIds.contains(tag.id))
+                                }
+                                .buttonStyle(.plain)
+                                // Outside the NavigationLink so it gets its own tap
+                                // target instead of fighting the card's navigation.
+                                if cloud.failedTagIds.contains(tag.id) {
+                                    Button {
+                                        Task { await cloud.retryPublish(tag: tag, store: store) }
+                                    } label: {
+                                        Label("Retry upload", systemImage: "arrow.clockwise")
+                                            .font(.caption.weight(.semibold))
+                                    }
+                                    .foregroundStyle(Theme.record)
+                                    .buttonStyle(.plain)
+                                    .padding(.leading, 4)
+                                }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
 
@@ -242,6 +258,7 @@ struct SingView: View {
             } catch {
                 codeBusy = false
                 codeError = error.localizedDescription
+                Diagnostics.logError("redeemCode", error)
             }
         }
     }
@@ -338,6 +355,7 @@ struct TagAlongSheet: View {
             } catch {
                 adoptingPart = nil
                 self.error = "Couldn't fetch the tag: \(error.localizedDescription)"
+                Diagnostics.logError("tagAlong.adopt", error)
             }
         }
     }

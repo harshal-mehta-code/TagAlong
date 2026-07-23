@@ -378,6 +378,7 @@ private struct PerformanceExportModifier: ViewModifier {
                         // ignore
                     } catch {
                         errorMessage = error.localizedDescription
+                        Diagnostics.logError("export", error)
                     }
                 }
             }
@@ -474,6 +475,7 @@ private struct ExportResultSheet: View {
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             } catch {
                 saveState = .failed(error.localizedDescription)
+                Diagnostics.logError("export.saveToPhotos", error)
             }
         }
     }

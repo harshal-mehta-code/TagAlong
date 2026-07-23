@@ -11,6 +11,8 @@ struct TagAlongApp: App {
     @StateObject private var cache = CloudCache()
 
     init() {
+        // Catch even a startup crash.
+        Diagnostics.install()
         // Must run before any CloudStore (Auth/Firestore) is created. @StateObject
         // defers CloudStore()'s autoclosure until first body eval, i.e. after this.
         FirebaseApp.configure()
@@ -99,12 +101,16 @@ struct BottomBar: View {
     }
 }
 
-// MARK: - Onboarding (docs/10 §D + §F1)
+// MARK: - Onboarding (docs/10 §D + §F1, M5-40 explainer)
 
-/// One screen, one line, one question: ground the word "tag," then ask what
-/// you sing. The answer powers "Your spot is waiting" and feed ranking.
+/// A skippable 3-card explainer (what a tag is, how tagging along works,
+/// headphones matter) followed by the "what do you sing" question that
+/// actually completes onboarding. Swipeable or button-advanced; skip jumps
+/// straight to the question. The whole thing clears in well under 15s.
 struct OnboardingView: View {
     @EnvironmentObject var cloud: CloudStore
+    @State private var page = 0
+    private let pageCount = 4
 
     private func hint(_ part: Part) -> String {
         switch part {
@@ -118,44 +124,121 @@ struct OnboardingView: View {
     var body: some View {
         ZStack {
             Theme.stageGradient.ignoresSafeArea()
-            VStack(spacing: 14) {
-                Spacer()
-                Text("TagAlong")
-                    .font(.system(size: 40, design: .serif).weight(.semibold))
-                    .foregroundStyle(Theme.ivory)
-                    .shadow(color: Theme.brass.opacity(0.4), radius: 10)
-                Text("A tag is the best 30 seconds of a song.\nSing one part; strangers finish it.")
-                    .multilineTextAlignment(.center)
-                    .font(.headline)
-                    .foregroundStyle(Theme.textPrimary)
-                Spacer()
-                Text("WHAT DO YOU SING?")
-                    .font(.system(size: 11, weight: .bold))
-                    .tracking(1.5)
-                    .foregroundStyle(Theme.textSecondary)
-                ForEach(Part.allCases) { part in
-                    Button { finish(part) } label: {
-                        HStack(spacing: 10) {
-                            Circle().fill(part.color).frame(width: 10, height: 10)
-                            Text(part.label).font(.headline).foregroundStyle(Theme.textPrimary)
-                            Spacer()
-                            Text(hint(part)).font(.caption).foregroundStyle(Theme.textSecondary)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 13)
-                        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
-                        .overlay(RoundedRectangle(cornerRadius: 14)
-                            .stroke(part.color.opacity(0.35), lineWidth: 1))
-                    }
-                    .buttonStyle(PressScale(scale: 0.97))
-                }
-                Button("Not sure yet") { finish(nil) }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.textSecondary)
-                    .padding(.top, 4)
-                Spacer()
+            TabView(selection: $page) {
+                explainerCard(
+                    emoji: "🎤",
+                    title: "What's a tag?",
+                    body: "A tag is the best 30 seconds of a song — four-part harmony, no instruments. Sing one part; the other three are strangers' voices, whenever they get to it."
+                ).tag(0)
+                explainerCard(
+                    emoji: "🤝",
+                    title: "Tagging along",
+                    body: "Find an open part and sing along with what's already there. When the fourth voice lands, everyone gets notified — the chord rings."
+                ).tag(1)
+                explainerCard(
+                    emoji: "🎧",
+                    title: "Wear headphones",
+                    body: "Recording without them lets your mic pick up the other parts through your speaker, and the mix turns to mud. Headphones keep every voice clean."
+                ).tag(2)
+                partPickerCard.tag(3)
             }
-            .padding(28)
+            .tabViewStyle(.page(indexDisplayMode: .never))
+
+            VStack {
+                HStack {
+                    Spacer()
+                    if page < pageCount - 1 {
+                        Button("Skip") { withAnimation { page = pageCount - 1 } }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                Spacer()
+                if page < pageCount - 1 {
+                    pageDots.padding(.bottom, 24)
+                }
+            }
+        }
+    }
+
+    private func explainerCard(emoji: String, title: String, body text: String) -> some View {
+        VStack(spacing: 18) {
+            Spacer()
+            Text(emoji).font(.system(size: 56))
+            Text(title)
+                .font(.system(.title2, design: .serif).weight(.semibold))
+                .foregroundStyle(Theme.ivory)
+            Text(text)
+                .multilineTextAlignment(.center)
+                .font(.body)
+                .foregroundStyle(Theme.textPrimary)
+                .padding(.horizontal, 12)
+            Spacer()
+            Button {
+                withAnimation { page += 1 }
+            } label: {
+                Text("Next")
+                    .font(.headline)
+                    .foregroundStyle(Color(hex: 0x2E2410))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        LinearGradient(colors: [Theme.brassSoft, Theme.brass],
+                                       startPoint: .top, endPoint: .bottom),
+                        in: RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(PressScale())
+            Spacer().frame(height: 36)
+        }
+        .padding(28)
+    }
+
+    private var partPickerCard: some View {
+        VStack(spacing: 14) {
+            Spacer()
+            Text("TagAlong")
+                .font(.system(size: 40, design: .serif).weight(.semibold))
+                .foregroundStyle(Theme.ivory)
+                .shadow(color: Theme.brass.opacity(0.4), radius: 10)
+            Spacer()
+            Text("WHAT DO YOU SING?")
+                .font(.system(size: 11, weight: .bold))
+                .tracking(1.5)
+                .foregroundStyle(Theme.textSecondary)
+            ForEach(Part.allCases) { part in
+                Button { finish(part) } label: {
+                    HStack(spacing: 10) {
+                        Circle().fill(part.color).frame(width: 10, height: 10)
+                        Text(part.label).font(.headline).foregroundStyle(Theme.textPrimary)
+                        Spacer()
+                        Text(hint(part)).font(.caption).foregroundStyle(Theme.textSecondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 13)
+                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14)
+                        .stroke(part.color.opacity(0.35), lineWidth: 1))
+                }
+                .buttonStyle(PressScale(scale: 0.97))
+            }
+            Button("Not sure yet") { finish(nil) }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.textSecondary)
+                .padding(.top, 4)
+            Spacer()
+        }
+        .padding(28)
+    }
+
+    private var pageDots: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<pageCount, id: \.self) { i in
+                Circle()
+                    .fill(i == page ? Theme.brass : Theme.textSecondary.opacity(0.35))
+                    .frame(width: 6, height: 6)
+            }
         }
     }
 
@@ -313,7 +396,10 @@ struct TagDetailView: View {
                     do {
                         try await cloud.deleteTagEverywhere(tag: liveTag, store: store)
                         dismiss()
-                    } catch { cloud.errorMessage = error.localizedDescription }
+                    } catch {
+                        cloud.errorMessage = error.localizedDescription
+                        Diagnostics.logError("deleteTagEverywhere", error)
+                    }
                 }
             }
         } message: {
@@ -460,14 +546,25 @@ struct TagDetailView: View {
             if liveTag.publishedAt == nil {
                 Button {
                     Task {
-                        do { try await cloud.publish(tag: liveTag, takes: store.takes(for: tag.id), store: store) }
-                        catch { cloud.errorMessage = error.localizedDescription }
+                        do {
+                            try await cloud.publish(tag: liveTag, takes: store.takes(for: tag.id), store: store)
+                            cloud.failedTagIds.remove(liveTag.id)
+                        } catch {
+                            cloud.errorMessage = error.localizedDescription
+                            cloud.failedTagIds.insert(liveTag.id)
+                            Diagnostics.logError("publish", error)
+                        }
                     }
                 } label: { Label("Publish to community", systemImage: "icloud.and.arrow.up") }
                 Button(role: .destructive) {
                     store.delete(tag: tag); dismiss()
                 } label: { Label("Delete tag", systemImage: "trash") }
             } else {
+                if cloud.failedTagIds.contains(liveTag.id) {
+                    Button {
+                        Task { await cloud.retryPublish(tag: liveTag, store: store) }
+                    } label: { Label("Retry upload", systemImage: "arrow.clockwise.icloud") }
+                }
                 if let code = liveTag.inviteCode {
                     Button { inviteShareShown = true } label: {
                         Label("Share invite — code \(code)", systemImage: "ticket")
@@ -835,8 +932,11 @@ struct RecordView: View {
                 } else {
                     try await cloud.publishTake(take, for: liveTag, store: store)
                 }
+                cloud.failedTagIds.remove(liveTag.id)
             } catch {
                 cloud.errorMessage = error.localizedDescription
+                cloud.failedTagIds.insert(liveTag.id)
+                Diagnostics.logError("publish", error)
             }
         }
     }

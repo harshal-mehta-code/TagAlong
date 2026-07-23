@@ -26,6 +26,16 @@ struct SocialRail: View {
             railButton(icon: "square.and.arrow.up", label: "Share", action: onShare)
             railButton(icon: "person.2", label: "Credits", action: onCredits)
         }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 8)
+        // The rail sits directly over a video tile that's tap-to-solo across
+        // its ENTIRE bounds. Without this, a tap that lands in the gap
+        // between two rail buttons falls straight through the VStack's empty
+        // space to the tile underneath and solos the wrong part. Shielding
+        // the rail's whole footprint — buttons still get first crack at their
+        // own taps — turns a near-miss into a no-op instead of a misfire.
+        .contentShape(Rectangle())
+        .onTapGesture {}
     }
 
     private func railButton(icon: String, label: String,
@@ -42,7 +52,10 @@ struct SocialRail: View {
                     .foregroundStyle(Theme.ivory.opacity(0.9))
                     .shadow(color: .black.opacity(0.6), radius: 3)
             }
-            .frame(width: 56)
+            // Full 44pt+ tap target (Apple HIG minimum) instead of just the
+            // drawn glyph bounds.
+            .frame(width: 56, height: 54)
+            .contentShape(Rectangle())
         }
         .buttonStyle(PressScale(scale: 0.88))
     }
@@ -133,6 +146,7 @@ struct SocialRailHost: View {
             } catch {
                 isRung = !target
                 ringDelta += target ? -1 : 1
+                Diagnostics.logError("ring", error)
             }
             busy = false
         }
@@ -251,6 +265,7 @@ struct AfterglowSheet: View {
             error = nil
         } catch {
             self.error = error.localizedDescription
+            Diagnostics.logError("afterglow.refresh", error)
         }
         loading = false
     }
@@ -266,6 +281,7 @@ struct AfterglowSheet: View {
                 await refresh()
             } catch {
                 self.error = error.localizedDescription
+                Diagnostics.logError("afterglow.postComment", error)
             }
             sending = false
         }

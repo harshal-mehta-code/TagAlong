@@ -34,6 +34,7 @@ final class AudioClock {
             try s.setActive(true)
         } catch {
             print("audio session: \(error)")
+            Diagnostics.logError("audioSession.configure", error)
         }
     }
 
@@ -43,6 +44,7 @@ final class AudioClock {
             try engine.start()
         } catch {
             print("audio engine: \(error)")
+            Diagnostics.logError("audioEngine.start", error)
         }
     }
 

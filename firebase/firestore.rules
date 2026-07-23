@@ -21,6 +21,14 @@ service cloud.firestore {
       allow read, update, delete: if false;
     }
 
+    // Diagnostics (crash + non-fatal error reports, beta only): write-only
+    // drop box, read from the console only. Not gated on auth — a crash
+    // during sign-in itself must still be reportable.
+    match /diagnostics/{diagnosticId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+
     // A tag belongs to its creator (docs/10 §A): creatorUid is pinned at
     // create, and only the creator may delete the tag everywhere. Updates stay
     // open to any signed-in user because completion metadata (parts/

@@ -101,6 +101,8 @@ struct TagCard: View {
     var invitationPart: Part? = nil
     /// 0…1 while a take of this tag uploads (docs/10 §F6).
     var uploadProgress: Double? = nil
+    /// True when the last publish/upload attempt for this tag failed.
+    var uploadFailed: Bool = false
 
     var body: some View {
         switch style {
@@ -125,7 +127,14 @@ struct TagCard: View {
                 }
                 Spacer(minLength: 0)
             }
-            if let uploadProgress {
+            if uploadFailed {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.icloud")
+                    Text("Upload didn't finish — tap retry below")
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Theme.record)
+            } else if let uploadProgress {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Uploading your voice… \(Int(uploadProgress * 100))%")
                         .font(.system(size: 10, weight: .semibold))

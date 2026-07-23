@@ -140,6 +140,7 @@ struct WatchFeedView: View {
                 tagAlong = TagAlongRequest(tag: tag, part: part)
             } catch {
                 adoptError = error.localizedDescription
+                Diagnostics.logError("feed.adopt", error)
             }
             adopting = false
         }
@@ -580,6 +581,7 @@ struct CloudPerformancePage: View {
                 if isCurrent { startPlayback(set) }
             } catch {
                 failed = error.localizedDescription
+                Diagnostics.logError("feed.fetch", error)
             }
             fetching = false
         }
